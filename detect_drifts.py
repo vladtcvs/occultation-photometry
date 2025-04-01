@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import cv2
 import imutils
 import imutils.contours
+import math
+import statistics
 
 from skimage import measure
 
@@ -76,9 +78,88 @@ def detect_bold_tracks(gray : np.ndarray,
 
     return tracks
 
+def point_inside_rect(x, y, left, right, top, bottom) -> bool:
+    return x >= left and x <= right and y >= top and y <= bottom
+
+def detect_overlap(track1, track2) -> bool:
+    left1, right1, top1, bottom1 = track1
+    left2, right2, top2, bottom2 = track2
+    if point_inside_rect(left1, top1, left2, right2, top2, bottom2):
+        return True
+    if point_inside_rect(right1, top1, left2, right2, top2, bottom2):
+        return True
+    if point_inside_rect(left1, bottom1, left2, right2, top2, bottom2):
+        return True
+    if point_inside_rect(right1, bottom1, left2, right2, top2, bottom2):
+        return True
+    return False
+
+def clear_overlapped(tracks : list) -> list:
+    not_overlapped = []
+    for ind1, track1 in enumerate(tracks):
+        for ind2, track2 in enumerate(tracks):
+            if ind1 == ind2:
+                continue
+            if detect_overlap(track1, track2):
+                break
+        else:
+            not_overlapped.append(track1)
+    return not_overlapped
+
+def clear_bad_size(tracks : list, kappa : float = 1) -> list:
+    widths = []
+    heights = []
+    for left, right, top, bottom in tracks:
+        width = int(right - left)
+        height = int(bottom - top)
+        widths.append(width)
+        heights.append(height)
+    width0 = statistics.mean(widths)
+    height0 = statistics.mean(heights)
+    stdw = statistics.stdev(widths)
+    stdh = statistics.stdev(heights)
+    goods = []
+    for left, right, top, bottom in tracks:
+        width = right - left
+        height = bottom - top
+        if abs(width - width0) < stdw * kappa and abs(height - height0) < stdh * kappa:
+            goods.append((left, right, top, bottom))
+    return goods
+
+def mean_track(tracks : list, image : np.ndarray) -> np.ndarray:
+    maxw = 0
+    maxh = 0
+    for left,right,top,bottom in tracks:
+        w = right - left
+        h = bottom - top
+        maxw = max(maxw, w)
+        maxh = max(maxh, h)
+    sum_track = np.zeros((maxh,maxw))
+    weight = np.zeros((maxh,maxw))
+    for left,right,top,bottom in tracks:
+        block = image[top:bottom,left:right]
+        h = block.shape[0]
+        w = block.shape[1]
+        
+        dx = 0
+        dy = 0
+
+        aligned = np.zeros((maxh,maxw))
+        aligned_weight = np.zeros((maxh,maxw))
+        aligned[dy:dy+h,dx:dx+w] = block
+        aligned_weight[dy:dy+h,dx:dx+w] = 1
+        sum_track += aligned
+        weight += aligned_weight
+    sum_track = sum_track / weight
+    sum_track[np.where(weight == 0)] = 0
+    return sum_track
+
 gray = np.array(Image.open('examples/westphalia.png').convert('L'))
-tracks = detect_bold_tracks(gray, 6)
-left, right, top, bottom = tracks[1]
-track = gray[top:bottom,left:right]
-plt.imshow(track)
+tracks = detect_bold_tracks(gray, 10)
+tracks = clear_overlapped(tracks)
+tracks = clear_bad_size(tracks, kappa=2)
+tracks = clear_bad_size(tracks, kappa=1.2)
+print(len(tracks))
+track = mean_track(tracks, gray)
+plt.imshow(track, cmap="gray")
 plt.show()
