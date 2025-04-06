@@ -1,14 +1,9 @@
 from typing import Tuple
 import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
 import cv2
 import imutils
 import imutils.contours
-import math
 import statistics
-from scipy import signal
-import scipy.ndimage.filters as filters
 
 from skimage import measure
 
@@ -180,22 +175,24 @@ def track_to_points(track : np.ndarray) -> list:
     return np.array(points), transposed
 
 def smooth_track_points(points, transposed):
-    kernel_size = 5
-    kernel = np.ones(kernel_size) / kernel_size
-
+    hw = 2
     L = points.shape[0]
     if not transposed:
-        points[2:L-2,1] = np.convolve(points[:,1], kernel, mode='valid')
+        index = 1
     else:
-        points[2:L-2,0] = np.convolve(points[:,0], kernel, mode='valid')
-    points = points[2:L-2]
-    return points
+        index = 0
 
-def smooth_track_profile(profile : np.ndarray, smooth : int):
-    if smooth % 2 == 0:
-        smooth += 1
-    kernel = np.ones(smooth) / smooth
-    return np.convolve(profile, kernel, mode='same')
+    average = np.zeros((L,))
+    for x in range(L):
+        s = 0
+        num = 0
+        for y in range(x-hw,x+hw+1):
+            if y < 0 or y >= L:
+                continue
+            s += points[y, index]
+            num += 1
+        average[x] = s / num
+    return average
 
 def build_reference_track(gray : np.ndarray) -> Tuple[np.ndarray, np.ndarray, bool]:
     tracks = detect_bold_tracks(gray, 10)
@@ -206,169 +203,3 @@ def build_reference_track(gray : np.ndarray) -> Tuple[np.ndarray, np.ndarray, bo
     points, transposed = track_to_points(track)
     points = smooth_track_points(points, transposed)
     return (track, points, transposed)
-
-def build_track_normals(points : np.ndarray)-> np.ndarray:
-    # length of track along main axis
-    L = points.shape[0]
-
-    # in each X we have vector of direction of normal
-    normals = np.zeros((L, 2))
-
-    # we will use same normal in each point as a first approach
-    # it ortogonal to track
-    # (ny, nx) = (-tx, ty)
-
-    tx = points[L-1,1] - points[0,1]
-    ty = points[L-1,0] - points[0,0]
-
-    nx, ny = ty, -tx
-    l = math.sqrt(nx**2+ny**2)
-    nx, ny = nx/l, ny/l
-    for x in range(L):
-        normals[x,0] = ny
-        normals[x,1] = nx
-    return normals
-
-def interpolate(v1 : float | None, v2 : float | None, k):
-    if v1 is None:
-        return v2
-    if v2 is None:
-        return v1
-    return v1*(1-k)+v2*k
-
-def _getpixel(track : np.ndarray, y : int, x : int):
-    if x < 0 or y < 0:
-        return None
-    if x >= track.shape[1] or y >= track.shape[0]:
-        return None
-    return track[y,x]
-
-def getpixel(track : np.ndarray, y : float, x : float) -> float:
-    y0 = math.floor(y)
-    x0 = math.floor(x)
-    ky = y - y0
-    kx = x - x0
-    v00 = _getpixel(track, y = y0, x = x0)
-    v01 = _getpixel(track, y = y0, x = x0+1)
-    v10 = _getpixel(track, y = y0+1, x = x0)
-    v11 = _getpixel(track, y = y0+1, x = x0+1)
-    v0 = interpolate(v00, v01, kx)
-    v1 = interpolate(v10, v11, kx)
-    v = interpolate(v0, v1, ky)
-    return v
-
-def make_slice(track : np.ndarray, position, direction, half_w : int, offset : float):
-    y,x = position
-    ty,tx = direction
-    slice = np.zeros((2*half_w+1,))
-    for i in range(2*half_w+1):
-        s = i - half_w + offset
-        py, px = y+ty*s, x+tx*s
-        slice[i] = getpixel(track, y=py, x=px)
-    return slice
-
-def slice_track(track : np.ndarray, reference_track_points : np.ndarray, half_w : int, margin : int, offset : float):
-    normals = build_track_normals(reference_track_points)
-    L = reference_track_points.shape[0]
-    slices = np.zeros((L,2*half_w+1))
-    shift = np.array([margin, margin])
-    for i in range(L):
-        point = reference_track_points[i,:] + shift
-        normal = normals[i,:]
-        track_slice = make_slice(track, point, normal, half_w, offset)
-        slices[i,:] = track_slice
-    return slices
-
-def slices_to_profile(slices : np.ndarray) -> np.ndarray:
-    mask = 1-np.isnan(slices)
-    weight = np.sum(mask, axis=1)
-    width = slices.shape[1]
-    slices[np.where(np.isnan(slices))] = 0
-    value = np.sum(slices, axis=1)
-    return value / weight * width
-
-def extract_track(gray : np.ndarray, x0 : int, y0 : int, w : int, h : int, margin : int):
-    track = gray[y0-margin:y0+h+margin, x0-margin:x0+w+margin]
-    return track
-
-margin = 20
-half_w = 3
-
-gray = np.array(Image.open('examples/westphalia.png').convert('L'))
-
-ref_track, points, transposed = build_reference_track(gray)
-ref_slices = slice_track(ref_track, points, half_w, 0, 0)
-
-x0 = 297
-y0 = 282
-w = ref_track.shape[1]
-h = ref_track.shape[0]
-
-occ_track = extract_track(gray, x0, y0, w, h, margin)
-occ_slices = slice_track(occ_track, points, half_w, margin, 0)
-occ_slices_offset_1 = slice_track(occ_track, points, half_w, margin, -2*half_w)
-occ_slices_offset_2 = slice_track(occ_track, points, half_w, margin, 2*half_w)
-
-ref_profile = slices_to_profile(ref_slices)
-
-# occultation profile and poisson deviation
-occ_profile = slices_to_profile(occ_slices)
-poisson_err = np.sqrt(occ_profile)
-
-# profiles of paths parallel to track
-occ_profile_1 = slices_to_profile(occ_slices_offset_1)
-occ_profile_2 = slices_to_profile(occ_slices_offset_2)
-
-# average sky value and error of sky brightness
-occ_profile_conn = np.concatenate([occ_profile_1, occ_profile_2], axis=0)
-sky_average = np.average(occ_profile_conn)
-sky_stdev = np.std(occ_profile_conn)
-
-
-clear_occ_profile = occ_profile - sky_average
-
-
-top_sky_err = smooth_track_profile(clear_occ_profile + sky_stdev, 15)
-low_sky_err = smooth_track_profile(clear_occ_profile - sky_stdev, 15)
-
-top_poisson_err = smooth_track_profile(clear_occ_profile + poisson_err, 15)
-low_poisson_err = smooth_track_profile(clear_occ_profile - poisson_err, 15)
-
-total_err = np.sqrt(sky_stdev**2 + poisson_err**2)
-top_total_err = smooth_track_profile(clear_occ_profile + total_err, 15)
-low_total_err = smooth_track_profile(clear_occ_profile - total_err, 15)
-
-
-#gray_rgb = cv2.cvtColor(gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
-ref_track_rgb = cv2.cvtColor(ref_track.astype(np.uint8), cv2.COLOR_GRAY2RGB)
-occ_track_rgb = cv2.cvtColor(occ_track.astype(np.uint8), cv2.COLOR_GRAY2RGB)
-
-for y,x in points:
-    ref_track_rgb[y,x,0] = 255
-    #occ_track_rgb[y+half_w,x+half_w,0] = 255
-
-if False:
-    fig, axs = plt.subplots(1,6)
-    axs[0].imshow(occ_track_rgb)
-    axs[1].imshow(ref_track_rgb)
-    axs[2].imshow(ref_slices, cmap='gray')
-    axs[3].imshow(occ_slices, cmap='gray')
-    axs[4].imshow(occ_slices_offset_1, cmap='gray')
-    axs[5].imshow(occ_slices_offset_2, cmap='gray')
-    plt.show()
-
-L = len(clear_occ_profile)
-xr = range(L)
-fig, axs = plt.subplots(2,2)
-axs[0,0].plot(xr, ref_profile)
-axs[0,0].set_title("Reference track")
-
-axs[0,1].plot(xr, clear_occ_profile, xr, top_sky_err, xr, low_sky_err)
-axs[0,1].set_title("Error of light pollution")
-
-axs[1,0].plot(xr, clear_occ_profile, xr, top_poisson_err, xr, low_poisson_err)
-axs[1,0].set_title("Error of poisson")
-
-axs[1,1].plot(xr, clear_occ_profile, xr, top_total_err, xr, low_total_err)
-axs[1,1].set_title("Total error")
-plt.show()
