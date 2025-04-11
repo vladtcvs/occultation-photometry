@@ -97,3 +97,18 @@ def slices_to_profile(slices : np.ndarray) -> np.ndarray:
     slices[np.where(np.isnan(slices))] = 0
     value = np.sum(slices, axis=1)
     return value / weight * width
+
+def reference_profile_time_analyze(profile : np.ndarray) -> np.ndarray:
+    """Find such time of each point of profile, that stretching profile according to such times, make it flat"""
+    L = profile.shape[0]
+    smooth_window = int(L / 8)
+    smoothed = smooth_track_profile(profile, smooth_window)
+    speed = 1 / smoothed
+    speed = smooth_track_profile(speed, smooth_window)
+    
+    dts = 1 / speed
+    T = np.sum(dts)
+    return dts * L / T
+
+def profile_according_to_time(profile : np.ndarray, dtimes : np.ndarray):
+    return profile / dtimes

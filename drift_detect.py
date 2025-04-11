@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import List, Tuple
 import numpy as np
 import cv2
 import imutils
@@ -6,6 +6,12 @@ import imutils.contours
 import statistics
 
 from skimage import measure
+
+
+def extract_track(gray : np.ndarray, x0 : int, y0 : int, w : int, h : int, margin : int):
+    track = gray[y0-margin:y0+h+margin, x0-margin:x0+w+margin]
+    return track
+
 
 def detect_bold_tracks(gray : np.ndarray,
                        num_tracks : int = 4,
@@ -182,7 +188,7 @@ def smooth_track_points(points, transposed):
     else:
         index = 0
 
-    average = np.zeros((L,))
+    average = np.zeros((L,2))
     for x in range(L):
         s = 0
         num = 0
@@ -191,15 +197,22 @@ def smooth_track_points(points, transposed):
                 continue
             s += points[y, index]
             num += 1
-        average[x] = s / num
+        average[x, index] = s / num
+        average[x, 1-index] = points[x, 1-index]
     return average
 
-def build_reference_track(gray : np.ndarray) -> Tuple[np.ndarray, np.ndarray, bool]:
-    tracks = detect_bold_tracks(gray, 10)
+def detect_reference_tracks(gray : np.ndarray, count : int = 10, kappas : list | None = None) -> list:
+    tracks = detect_bold_tracks(gray, count)
     tracks = clear_overlapped(tracks)
-    tracks = clear_bad_size(tracks, kappa=2)
-    tracks = clear_bad_size(tracks, kappa=1.2)
-    track = mean_track(tracks, gray)
+    if kappas is None:
+        kappas = [2, 1.2]
+    for kappa in kappas:
+        tracks = clear_bad_size(tracks, kappa=kappa)
+    return tracks
+    
+
+def build_reference_track(gray : np.ndarray, references : List[tuple]) -> Tuple[np.ndarray, np.ndarray, bool]:
+    track = mean_track(references, gray)
     points, transposed = track_to_points(track)
     points = smooth_track_points(points, transposed)
     return (track, points, transposed)
