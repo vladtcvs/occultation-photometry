@@ -98,14 +98,48 @@ class DriftContext:
         self.gray = gray
         self.rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
         self.notify_observers()
-        
+
+    def _draw_tracks(self):
+        # draw reference track line on each of reference tracks on original image
+        self.rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+        for left,right,top,bottom in self.reference_tracks:
+            # draw bounding rectangles
+            cv2.rectangle(self.rgb, (left,top), (right,bottom), color=(255,0,0), thickness=1)
+
+            if self.ref_points is not None:
+                # draw core line
+                for y,x in self.ref_points:
+                    xx = left + int(x)
+                    yy = top + int(y)
+                    if xx < 0 or yy < 0 or xx >= self.rgb.shape[1] or yy >= self.rgb.shape[0]:
+                        continue
+                    self.rgb[yy,xx,0] = 255
+                    self.rgb[yy,xx,1] = 0
+                    self.rgb[yy,xx,2] = 0
+
+    def _draw_track(self, track : np.ndarray, points : np.ndarray, normals : np.ndarray) -> np.ndarray:
+        # draw line of the track
+        track_rgb = cv2.cvtColor(track.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+        for y, x in points:
+            track_rgb[int(y),int(x),0] = 255
+
+        # draw normals
+        for index, ((y,x), (ny,nx)) in enumerate(zip(points, normals)):
+            if index % 10 != 0:
+                continue
+            x1 = int(x-nx*self.half_w)
+            y1 = int(y-ny*self.half_w)
+            x2 = int(x+nx*self.half_w)
+            y2 = int(y+ny*self.half_w)
+
+            cv2.line(track_rgb, (x1,y1), (x2,y2), (0,255,0), 1)
+        return track_rgb
+
     def detect_tracks(self):
         self.reference_tracks = drift_detect.detect_reference_tracks(self.gray, 9, [2, 1.2])
         
         # draw track bounding rectangles
-        self.rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
-        for left,right,top,bottom in self.reference_tracks:
-            cv2.rectangle(self.rgb, (left,top), (right,bottom), color=(255,0,0), thickness=1)
+        self._draw_tracks()
         self.notify_observers()
 
     def build_reference(self):
@@ -118,43 +152,14 @@ class DriftContext:
         self.ref_top_poisson_err = drift_profile.smooth_track_profile(self.ref_profile + self.ref_poisson_err, self.smooth_err)
         self.ref_low_poisson_err = drift_profile.smooth_track_profile(self.ref_profile - self.ref_poisson_err, self.smooth_err)
 
-        # draw line of the track
-        self.ref_track_rgb = cv2.cvtColor(self.ref_track.astype(np.uint8), cv2.COLOR_GRAY2RGB)
-        for y,x in self.ref_points:
-            self.ref_track_rgb[int(y),int(x),0] = 255
-        
-        # draw normals
-        for index, ((y,x), (ny,nx)) in enumerate(zip(self.ref_points, self.ref_normals)):
-            if index % 10 != 0:
-                continue
-            x1 = int(x-nx*self.half_w)
-            y1 = int(y-ny*self.half_w)
-            x2 = int(x+nx*self.half_w)
-            y2 = int(y+ny*self.half_w)
-            
-            cv2.line(self.ref_track_rgb, (x1,y1), (x2,y2), (0,255,0), 1)
+        # draw reference track
+        self.ref_track_rgb = self._draw_track(self.ref_track, self.ref_points, self.ref_normals)
 
-        # draw reference track line on each of reference tracks on original image
-        self.rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
-        for left,right,top,bottom in self.reference_tracks:
-            # draw bounding rectangles
-            cv2.rectangle(self.rgb, (left,top), (right,bottom), color=(255,0,0), thickness=1)
-
-            # draw core line
-            for y,x in self.ref_points:
-                xx = left + int(x)
-                yy = top + int(y)
-                if xx < 0 or yy < 0 or xx >= self.rgb.shape[1] or yy >= self.rgb.shape[0]:
-                    continue
-                self.rgb[yy,xx,0] = 255
-                self.rgb[yy,xx,1] = 0
-                self.rgb[yy,xx,2] = 0
+        # draw tracks
+        self._draw_tracks()
 
         # build reference track plot
-        maxv = int(np.amax(self.ref_top_poisson_err)+1)
-        minv = int(np.amin(self.ref_low_poisson_err)-1)
         L = self.ref_top_poisson_err.shape[0]
-        H = maxv - minv
         xr = range(L)
         self.ref_profile_rgb = plot_to_numpy(xr, [self.ref_profile, self.ref_low_poisson_err, self.ref_top_poisson_err], 640, 480)
         self.notify_observers()
@@ -197,6 +202,7 @@ class DetectTracksPanel(wx.Panel, IObserver):
             image.SetData(data)
             gray_bitmap = image.ConvertToBitmap()
             self.imageCtrl.SetBitmap(gray_bitmap)
+            self.Layout()
             self.Refresh()
             self.imageCtrl.Refresh()
 
@@ -260,6 +266,7 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
             self.refProfileCtrl.SetBitmap(gray_bitmap)
             self.refProfileCtrl.Refresh()
 
+        self.Layout()
         self.Refresh()
 
     def notify(self):
