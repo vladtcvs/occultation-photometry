@@ -87,6 +87,13 @@ class DriftContext:
         self.ref_low_poisson_err = None
         self.ref_profile_rgb = None
 
+        self.occ_track_pos = None
+        self.occ_track_desc = None
+        self.occ_track = None
+        self.occ_track_rgb = None
+        self.occ_profile = None
+        self.occ_profile_rgb = None
+
     def add_observer(self, observer : IObserver):
         self.observers.append(observer)
 
@@ -117,6 +124,22 @@ class DriftContext:
                     self.rgb[yy,xx,1] = 0
                     self.rgb[yy,xx,2] = 0
 
+        if self.occ_track_desc is not None:
+            left,right,top,bottom = self.occ_track_desc
+            # draw bounding rectangles
+            cv2.rectangle(self.rgb, (left,top), (right,bottom), color=(0,127,0), thickness=1)
+            if self.ref_points is not None:
+                # draw core line
+                for y,x in self.ref_points:
+                    xx = left + int(x)
+                    yy = top + int(y)
+                    if xx < 0 or yy < 0 or xx >= self.rgb.shape[1] or yy >= self.rgb.shape[0]:
+                        continue
+                    self.rgb[yy,xx,0] = 0
+                    self.rgb[yy,xx,1] = 127
+                    self.rgb[yy,xx,2] = 0
+
+
     def _draw_track(self, track : np.ndarray, points : np.ndarray, normals : np.ndarray) -> np.ndarray:
         # draw line of the track
         track_rgb = cv2.cvtColor(track.astype(np.uint8), cv2.COLOR_GRAY2RGB)
@@ -142,7 +165,7 @@ class DriftContext:
         self._draw_tracks()
         self.notify_observers()
 
-    def build_reference(self):
+    def build_reference_track(self):
         self.ref_track, self.ref_points, self.ref_transposed = drift_detect.build_reference_track(self.gray, self.reference_tracks)
         self.ref_normals = drift_profile.build_track_normals(self.ref_points)
         self.ref_slices = drift_profile.slice_track(self.ref_track, self.ref_points, self.half_w, 0, 0)
@@ -162,6 +185,22 @@ class DriftContext:
         L = self.ref_top_poisson_err.shape[0]
         xr = range(L)
         self.ref_profile_rgb = plot_to_numpy(xr, [self.ref_profile, self.ref_low_poisson_err, self.ref_top_poisson_err], 640, 480)
+        self.notify_observers()
+
+    def specify_occ_track(self):
+        self.occ_track_pos = (282, 297)
+        w = self.ref_track.shape[1]
+        h = self.ref_track.shape[0]
+        x0 = self.occ_track_pos[1]
+        y0 = self.occ_track_pos[0]
+        self.occ_track_desc = (x0, x0 + w, y0, y0 + h)
+        left,right,top,bottom = self.occ_track_desc
+        self.occ_track = self.gray[top:bottom,left:right]
+        self.occ_track_rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)        
+
+        # draw tracks
+        self._draw_tracks()
+
         self.notify_observers()
 
 class DetectTracksPanel(wx.Panel, IObserver):
@@ -245,7 +284,8 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
         main_sizer.Add(ctl_panel)
 
     def BuildMeanReference(self, event):
-        self.context.build_reference()
+        self.context.build_reference_track()
+        self.context.specify_occ_track()
 
     def UpdateImage(self):
         if self.context.ref_track_rgb is not None:
