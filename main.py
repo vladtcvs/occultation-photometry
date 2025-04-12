@@ -272,6 +272,7 @@ class DetectTracksPanel(wx.Panel, IObserver):
     def AutoDetectTracks(self, event):
         self.context.detect_tracks()
         self.context.build_reference_track()
+        self.context.specify_occ_track()
 
     def SpecifyOccultationTrack(self, event):
         self.context.specify_occ_track()
