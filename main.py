@@ -65,6 +65,61 @@ def plot_to_numpy(xrange, datas, width=800, height=600, dpi=100):
     
     return img_array
 
+class DriftTrack:
+    left : int = None
+    right : int = None
+    top : int = None
+    bottom : int = None
+    half_w : int = 0
+    slices : np.ndarray = None
+
+    def __init__(self, gray : np.ndarray, margin : int = 0, points : np.ndarray = None, normals : np.ndarray = None, transposed : bool = False):
+        self.gray = gray
+        self.points = points
+        self.transposed = transposed
+        self.normals = normals
+        self.margin = margin
+
+    def draw(self, color, transparency):
+        rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+        color = np.array(color)
+        if self.points is not None:
+            for y, x in self.points:
+                xx = int(x+self.margin)
+                yy = int(y+self.margin)
+                if xx < 0 or yy < 0 or xx >= rgb.shape[1] or yy >= rgb.shape[0]:
+                    continue
+                rgb[yy, xx] = rgb[yy, xx] * transparency + color * (1-transparency)
+
+        # draw normals
+        if self.normals is not None and self.points is not None:
+            for index, ((y,x), (ny,nx)) in enumerate(zip(self.points, self.normals)):
+                if index % 10 != 0:
+                    continue
+                x1 = int(x - nx*self.half_w + self.margin)
+                y1 = int(y - ny*self.half_w + self.margin)
+                x2 = int(x + nx*self.half_w + self.margin)
+                y2 = int(y + ny*self.half_w + self.margin)
+
+                cv2.line(rgb, (x1,y1), (x2,y2), (0,200,0), 1)
+        return rgb
+
+class DriftProfile:
+    def __init__(self, profile, error):
+        self.profile = profile
+        self.error = error
+
+    def plot(self, w : int, h : int, smooth_err : int = 0):
+        L = self.profile.shape[0]
+        xr = range(L)
+        if smooth_err == 0:
+            rgb = plot_to_numpy(xr, [self.profile, self.profile + self.error, self.profile - self.error], w, h)
+        else:
+            top = drift_profile.smooth_track_profile(self.profile + self.error, smooth_err)
+            bottom = drift_profile.smooth_track_profile(self.profile - self.error, smooth_err)
+            rgb = plot_to_numpy(xr, [self.profile, top, bottom], w, h)
+        return rgb
+
 class DriftContext:
     def __init__(self):
         self.observers : List[IObserver] = []
@@ -76,23 +131,17 @@ class DriftContext:
 
         self.reference_tracks = []
 
-        self.ref_track = None
+        self.ref_track : DriftTrack = None
         self.ref_track_rgb = None
-        self.ref_points = None
-        self.ref_normals = None
-        self.ref_transposed = False
 
-        self.ref_profile = None
-        self.ref_poisson_err = None
-        self.ref_top_poisson_err = None
-        self.ref_low_poisson_err = None
+        self.ref_profile : DriftProfile = None
         self.ref_profile_rgb = None
 
-        self.occ_track_pos = None
+        self.occ_track : DriftTrack = None
         self.occ_track_desc = None
-        self.occ_track = None
         self.occ_track_rgb = None
-        self.occ_profile = None
+
+        self.occ_profile : DriftProfile = None
         self.occ_profile_rgb = None
 
     def add_observer(self, observer : IObserver):
@@ -111,62 +160,29 @@ class DriftContext:
         # draw reference track line on each of reference tracks on original image
         self.rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
         for left,right,top,bottom in self.reference_tracks:
+            # draw track
+            if self.ref_track is not None:
+                track = DriftTrack(self.gray[top:bottom,left:right], points=self.ref_track.points)
+            else:
+                track = DriftTrack(self.gray[top:bottom,left:right])
+ 
+            self.rgb[top:bottom,left:right] = track.draw((255,0,0), 0.5)
+
             # draw bounding rectangles
             cv2.rectangle(self.rgb, (left,top), (right,bottom), color=(255,0,0), thickness=1)
 
-            if self.ref_points is not None:
-                # draw core line
-                for y,x in self.ref_points:
-                    xx = left + int(x)
-                    yy = top + int(y)
-                    if xx < 0 or yy < 0 or xx >= self.rgb.shape[1] or yy >= self.rgb.shape[0]:
-                        continue
-                    self.rgb[yy,xx,0] = 255
-                    self.rgb[yy,xx,1] = 0
-                    self.rgb[yy,xx,2] = 0
-
         if self.occ_track_desc is not None:
             left,right,top,bottom = self.occ_track_desc
+            if self.ref_track is not None:
+                track = DriftTrack(self.gray[top:bottom,left:right], points=self.ref_track.points)
+            else:
+                track = DriftTrack(self.gray[top:bottom,left:right])
+            self.rgb[top:bottom,left:right] = track.draw((0,200,0), 0.5)
+
             # draw bounding rectangles
             cv2.rectangle(self.rgb, (left,top), (right,bottom), color=(0,200,0), thickness=1)
             cv2.rectangle(self.rgb, (left-self.margin,top-self.margin), (right+self.margin,bottom+self.margin), color=(0,200,0), thickness=1)
-            if self.ref_points is not None:
-                # draw core line
-                for y,x in self.ref_points:
-                    xx = left + int(x)
-                    yy = top + int(y)
-                    if xx < 0 or yy < 0 or xx >= self.rgb.shape[1] or yy >= self.rgb.shape[0]:
-                        continue
-                    self.rgb[yy,xx,0] = 0
-                    self.rgb[yy,xx,1] = 127
-                    self.rgb[yy,xx,2] = 0
-
-
-    def _draw_track(self, track : np.ndarray,
-                    points : np.ndarray,
-                    normals : np.ndarray | None,
-                    margin : int,
-                    color : Tuple[int,int,int],
-                    transparency : float) -> np.ndarray:
-        # draw line of the track
-        track_rgb = cv2.cvtColor(track.astype(np.uint8), cv2.COLOR_GRAY2RGB)
-        color = np.array(color)
-        for y, x in points:
-            track_rgb[int(y+margin),int(x+margin)] = track_rgb[int(y+margin),int(x+margin)] * transparency + color * (1-transparency)
-
-        # draw normals
-        if normals is not None:
-            for index, ((y,x), (ny,nx)) in enumerate(zip(points, normals)):
-                if index % 10 != 0:
-                    continue
-                x1 = int(x-nx*self.half_w+margin)
-                y1 = int(y-ny*self.half_w+margin)
-                x2 = int(x+nx*self.half_w+margin)
-                y2 = int(y+ny*self.half_w+margin)
-
-                cv2.line(track_rgb, (x1,y1), (x2,y2), (0,200,0), 1)
-        return track_rgb
-
+    
     def detect_tracks(self):
         self.reference_tracks = drift_detect.detect_reference_tracks(self.gray, 9, [2, 1.2])
         
@@ -175,86 +191,97 @@ class DriftContext:
         self.notify_observers()
 
     def build_reference_track(self):
-        self.ref_track, self.ref_points, self.ref_transposed = drift_detect.build_reference_track(self.gray, self.reference_tracks)
+        ref_track, ref_points, ref_transposed = drift_detect.build_reference_track(self.gray, self.reference_tracks)
+        self.ref_track = DriftTrack(ref_track)
+        self.ref_track.points = ref_points
+        self.ref_track.transposed = ref_transposed
+
+        # reference track draw
+        self.ref_track_rgb = self.ref_track.draw((255,0,0), 0.5)
+
         # draw track bounding rectangles
         self._draw_tracks()
         self.notify_observers()
 
     def analyze_reference_track(self):
-        self.ref_normals = drift_profile.build_track_normals(self.ref_points)
-        self.ref_slices = drift_profile.slice_track(self.ref_track, self.ref_points, self.half_w, 0, 0)
+        self.ref_track.normals = drift_profile.build_track_normals(self.ref_track.points)
+        self.ref_track.slices = drift_profile.slice_track(self.ref_track.gray, self.ref_track.points, self.ref_track.half_w, 0, 0)
 
-        self.ref_profile = drift_profile.slices_to_profile(self.ref_slices)
-        self.ref_poisson_err = np.sqrt(self.ref_profile)
-        self.ref_top_poisson_err = drift_profile.smooth_track_profile(self.ref_profile + self.ref_poisson_err, self.smooth_err)
-        self.ref_low_poisson_err = drift_profile.smooth_track_profile(self.ref_profile - self.ref_poisson_err, self.smooth_err)
-
+        profile = drift_profile.slices_to_profile(self.ref_track.slices)
+        err = np.sqrt(profile)
+        self.ref_profile = DriftProfile(profile, err)
+        
         # draw reference track
-        self.ref_track_rgb = self._draw_track(self.ref_track, self.ref_points, self.ref_normals,
-                                              margin=0,
-                                              color=(255,0,0),
-                                              transparency=0.5)
+        if self.ref_track is not None:
+            self.ref_track.draw((255,0,0), 0.5)
 
         # draw tracks
         self._draw_tracks()
 
         # build reference track plot
-        L = self.ref_top_poisson_err.shape[0]
-        xr = range(L)
-        self.ref_profile_rgb = plot_to_numpy(xr, [self.ref_profile, self.ref_low_poisson_err, self.ref_top_poisson_err], 640, 480)
+        self.ref_profile_rgb = self.ref_profile.plot(640, 480, self.smooth_err)
         self.notify_observers()
 
     def specify_occ_track(self, x : int, y : int):
         if self.ref_track is not None:
             self.occ_track_pos = (y, x)
-            w = self.ref_track.shape[1]
-            h = self.ref_track.shape[0]
+            w = self.ref_track.gray.shape[1]
+            h = self.ref_track.gray.shape[0]
             x0 = self.occ_track_pos[1]
             y0 = self.occ_track_pos[0]
 
             self.occ_track_desc = (x0, x0 + w, y0, y0 + h)
-            self.occ_track = drift_detect.extract_track(self.gray, x0, y0, w, h, self.margin)
-            self.occ_track_rgb = cv2.cvtColor(self.occ_track.astype(np.uint8), cv2.COLOR_GRAY2RGB)        
+            occ_track = drift_detect.extract_track(self.gray, x0, y0, w, h, self.margin)
+            self.occ_track = DriftTrack(occ_track, self.margin, self.ref_track.points, None, self.ref_track.transposed)
+            self.occ_track.half_w = self.half_w
+
+            self.occ_track_rgb = self.occ_track.draw((0,200,0),0.5)
 
             # draw tracks
             self._draw_tracks()
 
-            # draw occultation track
-            self.occ_track_rgb = self._draw_track(self.occ_track, self.ref_points,
-                                                  normals=None,
-                                                  margin=self.margin,
-                                                  color=(0,200,0),
-                                                  transparency=0.5)
-
             self.notify_observers()
 
     def find_occ_profile(self):
-        self.occ_slices = drift_profile.slice_track(self.occ_track, self.ref_points, self.half_w, self.margin, 0)
-        self.occ_slices_offset_1 = drift_profile.slice_track(self.occ_track, self.ref_points, self.half_w, self.margin, -2*self.half_w)
-        self.occ_slices_offset_2 = drift_profile.slice_track(self.occ_track, self.ref_points, self.half_w, self.margin, 2*self.half_w)
+        self.occ_track.slices = drift_profile.slice_track(self.occ_track.gray,
+                                               self.occ_track.points,
+                                               self.occ_track.half_w,
+                                               self.occ_track.margin,
+                                               0)
+        occ_slices_offset_1 = drift_profile.slice_track(self.occ_track.gray,
+                                                        self.occ_track.points,
+                                                        self.occ_track.half_w,
+                                                        self.occ_track.margin,
+                                                        -3*self.occ_track.half_w)
+        occ_slices_offset_2 = drift_profile.slice_track(self.occ_track.gray,
+                                                        self.occ_track.points,
+                                                        self.occ_track.half_w,
+                                                        self.occ_track.margin,
+                                                        3*self.occ_track.half_w)
 
-        occ_raw_profile = drift_profile.slices_to_profile(self.occ_slices)
-        occ_poisson_err = np.sqrt(occ_raw_profile)
+        # profile of track
+        occ_profile_raw = drift_profile.slices_to_profile(self.occ_track.slices)
+        occ_poisson_err = np.sqrt(occ_profile_raw)
+        self.occ_profile_raw = DriftProfile(occ_profile_raw, occ_poisson_err)
 
         # profiles of paths parallel to track
-        occ_profile_1 = drift_profile.slices_to_profile(self.occ_slices_offset_1)
-        occ_profile_2 = drift_profile.slices_to_profile(self.occ_slices_offset_2)
+        occ_profile_1 = drift_profile.slices_to_profile(occ_slices_offset_1)
+        occ_profile_2 = drift_profile.slices_to_profile(occ_slices_offset_2)
 
         # average sky value and error of sky brightness
         occ_profile_conn = np.concatenate([occ_profile_1, occ_profile_2], axis=0)
         sky_average = np.average(occ_profile_conn)
         sky_stdev = np.std(occ_profile_conn)
 
-        self.occ_profile = occ_raw_profile - sky_average
+        print(sky_average, sky_stdev)
 
+        # Profile without sky glow
+        occ_profile_clear = self.occ_profile_raw.profile - sky_average
         occ_total_err = np.sqrt(sky_stdev**2 + occ_poisson_err**2)
-        occ_top_total_err = drift_profile.smooth_track_profile(self.occ_profile + occ_total_err, self.smooth_err)
-        occ_low_total_err = drift_profile.smooth_track_profile(self.occ_profile - occ_total_err, self.smooth_err)
+        self.occ_profile_clear = DriftProfile(occ_profile_clear, occ_total_err)
 
         # build occultation track plot
-        L = self.occ_profile.shape[0]
-        xr = range(L)
-        self.occ_profile_rgb = plot_to_numpy(xr, [self.occ_profile, occ_low_total_err, occ_top_total_err], 640, 480)
+        self.occ_profile_rgb = self.occ_profile_clear.plot(640, 480, self.smooth_err)
 
         self.notify_observers()
 
@@ -404,8 +431,8 @@ class DetectTracksPanel(wx.Panel, IObserver):
 
         w = self.context.gray.shape[1]
         h = self.context.gray.shape[0]
-        rw = self.context.ref_track.shape[1]
-        rh = self.context.ref_track.shape[0]
+        rw = self.context.ref_track.gray.shape[1]
+        rh = self.context.ref_track.gray.shape[0]
         self.context.specify_occ_track(int(w/2-rw/2), int(h/2-rh/2))
 
     def SpecifyOccultationTrack(self, event):
