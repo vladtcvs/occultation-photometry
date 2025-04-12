@@ -71,6 +71,7 @@ class DriftContext:
 
         self.gray = None
         self.half_w = 5
+        self.margin = 10
         self.smooth_err = 15
 
         self.reference_tracks = []
@@ -128,6 +129,7 @@ class DriftContext:
             left,right,top,bottom = self.occ_track_desc
             # draw bounding rectangles
             cv2.rectangle(self.rgb, (left,top), (right,bottom), color=(0,127,0), thickness=1)
+            cv2.rectangle(self.rgb, (left-self.margin,top-self.margin), (right+self.margin,bottom+self.margin), color=(0,127,0), thickness=1)
             if self.ref_points is not None:
                 # draw core line
                 for y,x in self.ref_points:
@@ -167,6 +169,11 @@ class DriftContext:
 
     def build_reference_track(self):
         self.ref_track, self.ref_points, self.ref_transposed = drift_detect.build_reference_track(self.gray, self.reference_tracks)
+        # draw track bounding rectangles
+        self._draw_tracks()
+        self.notify_observers()
+
+    def analyze_reference_track(self):
         self.ref_normals = drift_profile.build_track_normals(self.ref_points)
         self.ref_slices = drift_profile.slice_track(self.ref_track, self.ref_points, self.half_w, 0, 0)
 
@@ -193,13 +200,43 @@ class DriftContext:
         h = self.ref_track.shape[0]
         x0 = self.occ_track_pos[1]
         y0 = self.occ_track_pos[0]
+
         self.occ_track_desc = (x0, x0 + w, y0, y0 + h)
-        left,right,top,bottom = self.occ_track_desc
-        self.occ_track = self.gray[top:bottom,left:right]
-        self.occ_track_rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)        
+        self.occ_track = drift_detect.extract_track(self.gray, x0, y0, w, h, self.margin)
+        self.occ_track_rgb = cv2.cvtColor(self.occ_track.astype(np.uint8), cv2.COLOR_GRAY2RGB)        
 
         # draw tracks
         self._draw_tracks()
+
+        self.notify_observers()
+
+    def find_occ_profile(self):
+        self.occ_slices = drift_profile.slice_track(self.occ_track, self.ref_points, self.half_w, self.margin, 0)
+        self.occ_slices_offset_1 = drift_profile.slice_track(self.occ_track, self.ref_points, self.half_w, self.margin, -2*self.half_w)
+        self.occ_slices_offset_2 = drift_profile.slice_track(self.occ_track, self.ref_points, self.half_w, self.margin, 2*self.half_w)
+
+        occ_raw_profile = drift_profile.slices_to_profile(self.occ_slices)
+        occ_poisson_err = np.sqrt(occ_raw_profile)
+
+        # profiles of paths parallel to track
+        occ_profile_1 = drift_profile.slices_to_profile(self.occ_slices_offset_1)
+        occ_profile_2 = drift_profile.slices_to_profile(self.occ_slices_offset_2)
+
+        # average sky value and error of sky brightness
+        occ_profile_conn = np.concatenate([occ_profile_1, occ_profile_2], axis=0)
+        sky_average = np.average(occ_profile_conn)
+        sky_stdev = np.std(occ_profile_conn)
+
+        self.occ_profile = occ_raw_profile - sky_average
+
+        occ_total_err = np.sqrt(sky_stdev**2 + occ_poisson_err**2)
+        occ_top_total_err = drift_profile.smooth_track_profile(self.occ_profile + occ_total_err, self.smooth_err)
+        occ_low_total_err = drift_profile.smooth_track_profile(self.occ_profile - occ_total_err, self.smooth_err)
+
+        # build occultation track plot
+        L = self.occ_profile.shape[0]
+        xr = range(L)
+        self.occ_profile_rgb = plot_to_numpy(xr, [self.occ_profile, occ_low_total_err, occ_top_total_err], 640, 480)
 
         self.notify_observers()
 
@@ -226,10 +263,18 @@ class DetectTracksPanel(wx.Panel, IObserver):
         auto_detect_references.Bind(wx.EVT_BUTTON, self.AutoDetectTracks)
         ctl_sizer.Add(auto_detect_references)
 
+        specify_occultation = wx.Button(ctl_panel, label="Specify occultation")
+        specify_occultation.Bind(wx.EVT_BUTTON, self.SpecifyOccultationTrack)
+        ctl_sizer.Add(specify_occultation)
+
         main_sizer.Add(ctl_panel)
 
     def AutoDetectTracks(self, event):
         self.context.detect_tracks()
+        self.context.build_reference_track()
+
+    def SpecifyOccultationTrack(self, event):
+        self.context.specify_occ_track()
 
     def UpdateImage(self):
         if self.context.gray is None:
@@ -284,8 +329,7 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
         main_sizer.Add(ctl_panel)
 
     def BuildMeanReference(self, event):
-        self.context.build_reference_track()
-        self.context.specify_occ_track()
+        self.context.analyze_reference_track()
 
     def UpdateImage(self):
         if self.context.ref_track_rgb is not None:
@@ -312,10 +356,67 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
     def notify(self):
         self.UpdateImage()
 
-
 class OccultationTrackPanel(wx.Panel):
-    def __init__(self, parent, context):
+    def __init__(self, parent, context : DriftContext):
         wx.Panel.__init__(self, parent)
+        self.context = context
+        self.context.add_observer(self)
+        main_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.SetSizer(main_sizer)
+
+        image_panel = scrolled.ScrolledPanel(self)
+        image_panel.SetupScrolling()
+        
+        self.empty_img = wx.Image(240, 480)
+        self.imageCtrl = wx.StaticBitmap(image_panel, wx.ID_ANY, wx.Bitmap(self.empty_img))
+        
+        main_sizer.Add(image_panel)
+
+        ref_profile_panel = wx.Panel(self)
+        self.empty_occ_profile_img = wx.Image(640,480)
+        self.occProfileCtrl = wx.StaticBitmap(ref_profile_panel, wx.ID_ANY, wx.Bitmap(self.empty_occ_profile_img))
+
+        main_sizer.Add(ref_profile_panel)
+
+        ctl_sizer = wx.BoxSizer(wx.VERTICAL)
+        ctl_panel = wx.Panel(self)
+        ctl_panel.SetSizer(ctl_sizer)
+
+        build_mean_reference = wx.Button(ctl_panel, label="Analyze occultation track")
+        build_mean_reference.Bind(wx.EVT_BUTTON, self.AnalyzeOccultation)
+        ctl_sizer.Add(build_mean_reference)
+
+        main_sizer.Add(ctl_panel)
+
+    def AnalyzeOccultation(self, event):
+        self.context.find_occ_profile()
+
+    def UpdateImage(self):
+        if self.context.occ_track_rgb is not None:
+            height, width = self.context.occ_track_rgb.shape[:2]
+            data = self.context.occ_track_rgb.tobytes()
+            image = wx.Image(width, height)
+            image.SetData(data)
+            gray_bitmap = image.ConvertToBitmap()
+            self.imageCtrl.SetBitmap(gray_bitmap)
+            self.imageCtrl.Refresh()
+
+        if self.context.occ_profile_rgb is not None:
+            height, width = self.context.occ_profile_rgb.shape[:2]
+            data = self.context.occ_profile_rgb.tobytes()
+            image = wx.Image(width, height)
+            image.SetData(data)
+            gray_bitmap = image.ConvertToBitmap()
+            self.occProfileCtrl.SetBitmap(gray_bitmap)
+            self.occProfileCtrl.Refresh()
+
+        self.Layout()
+        self.Refresh()
+
+
+    def notify(self):
+        self.UpdateImage()
+
 
 class DriftWindow(wx.Frame):
     def __init__(self, title : str, context : DriftContext):
