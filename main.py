@@ -15,6 +15,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO
 
+import csv
+
 import abc
 
 import matplotlib
@@ -123,7 +125,7 @@ class DriftContext:
         self.gray = None
         self.half_w = 5
         self.margin = 10
-        self.smooth_err = 15
+        self.smooth_err = 21
 
         self.reference_tracks = []
 
@@ -258,7 +260,7 @@ class DriftContext:
         # profile of track
         occ_profile_raw = drift_profile.slices_to_profile(self.occ_track.slices)
         occ_poisson_err = np.sqrt(occ_profile_raw)
-        self.occ_profile_raw = DriftProfile(occ_profile_raw, occ_poisson_err)
+        occ_profile_raw = DriftProfile(occ_profile_raw, occ_poisson_err)
 
         # profiles of paths parallel to track
         occ_profile_1 = drift_profile.slices_to_profile(occ_slices_offset_1)
@@ -270,12 +272,12 @@ class DriftContext:
         sky_stdev = np.std(occ_profile_conn)
 
         # Profile without sky glow
-        occ_profile_clear = self.occ_profile_raw.profile - sky_average
+        occ_profile_clear = occ_profile_raw.profile - sky_average
         occ_total_err = np.sqrt(sky_stdev**2 + occ_poisson_err**2)
-        self.occ_profile_clear = DriftProfile(occ_profile_clear, occ_total_err)
+        self.occ_profile = DriftProfile(occ_profile_clear, occ_total_err)
 
         # build occultation track plot
-        self.occ_profile_rgb = self.occ_profile_clear.plot(640, 480, self.smooth_err)
+        self.occ_profile_rgb = self.occ_profile.plot(640, 480, self.smooth_err)
 
         self.notify_observers()
 
@@ -481,9 +483,31 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
 
         build_mean_reference = wx.Button(ctl_panel, label="Build mean reference track")
         build_mean_reference.Bind(wx.EVT_BUTTON, self.BuildMeanReference)
-        ctl_sizer.Add(build_mean_reference)
+        ctl_sizer.Add(build_mean_reference, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
+
+        save_mean_reference = wx.Button(ctl_panel, label="Save reference profile")
+        save_mean_reference.Bind(wx.EVT_BUTTON, self.SaveReference)
+        ctl_sizer.Add(save_mean_reference, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
 
         main_sizer.Add(ctl_panel)
+
+    def SaveReference(self, event):
+        with wx.FileDialog(self, "Save reference profile", wildcard="CSV (*.csv)|*.csv",style=wx.FD_SAVE) as fileDialog:
+
+            if fileDialog.ShowModal() == wx.ID_CANCEL:
+                return
+
+            pathname = str(fileDialog.GetPath())
+            if not pathname.endswith(".csv"):
+                pathname = pathname + ".csv"
+            with open(pathname, "w", encoding='utf8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['id', 'value', 'error'])
+                ids = range(self.context.ref_profile.profile.shape[0])
+                values = self.context.ref_profile.profile
+                errors = self.context.ref_profile.error
+                for index, value, error in zip(ids, values, errors):
+                    writer.writerow([index, value, error])
 
     def BuildMeanReference(self, event):
         self.context.analyze_reference_track()
@@ -541,11 +565,15 @@ class OccultationTrackPanel(wx.Panel):
 
         build_mean_reference = wx.Button(ctl_panel, label="Analyze occultation track")
         build_mean_reference.Bind(wx.EVT_BUTTON, self.AnalyzeOccultation)
-        ctl_sizer.Add(build_mean_reference)
+        ctl_sizer.Add(build_mean_reference, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
+
+        save_occultation = wx.Button(ctl_panel, label="Save occultation profile")
+        save_occultation.Bind(wx.EVT_BUTTON, self.SaveOccultation)
+        ctl_sizer.Add(save_occultation, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
 
         navigator = NavigationPanel(ctl_panel)
         navigator.add_observer(self)
-        ctl_sizer.Add(navigator, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, border=10)
+        ctl_sizer.Add(navigator, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
 
         main_sizer.Add(ctl_panel)
 
@@ -578,6 +606,25 @@ class OccultationTrackPanel(wx.Panel):
 
         self.Layout()
         self.Refresh()
+
+    def SaveOccultation(self, event):
+        with wx.FileDialog(self, "Save occultation profile", wildcard="CSV (*.csv)|*.csv",style=wx.FD_SAVE) as fileDialog:
+
+            if fileDialog.ShowModal() == wx.ID_CANCEL:
+                return
+
+            pathname = str(fileDialog.GetPath())
+            if not pathname.endswith(".csv"):
+                pathname = pathname + ".csv"
+            
+            with open(pathname, "w", encoding='utf8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['id', 'value', 'error'])
+                ids = range(self.context.occ_profile.profile.shape[0])
+                values = self.context.occ_profile.profile
+                errors = self.context.occ_profile.error
+                for index, value, error in zip(ids, values, errors):
+                    writer.writerow([index, value, error])
 
 
     def notify(self):

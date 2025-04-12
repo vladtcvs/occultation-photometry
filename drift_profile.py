@@ -8,14 +8,12 @@ def smooth_track_profile(profile : np.ndarray, smooth : int):
     L = profile.shape[0]
     average = np.zeros((L,))
     for x in range(L):
-        s = 0
-        num = 0
+        s = []
         for y in range(x-hw,x+hw+1):
             if y < 0 or y >= L:
                 continue
-            s += profile[y]
-            num += 1
-        average[x] = s / num
+            s.append(profile[y])
+        average[x] = np.mean(s)
     return average
 
 def build_track_normals(points : np.ndarray)-> np.ndarray:
