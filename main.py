@@ -154,6 +154,10 @@ class DriftContext:
         self.rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
         self.notify_observers()
 
+    def set_half_w(self, half_w):
+        self.half_w = half_w
+        self.notify_observers()
+
     def _draw_tracks(self):
         # draw reference track line on each of reference tracks on original image
         self.rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
@@ -202,16 +206,17 @@ class DriftContext:
         self.notify_observers()
 
     def analyze_reference_track(self):
+        self.ref_track.half_w = self.half_w
         self.ref_track.normals = drift_profile.build_track_normals(self.ref_track.points)
         self.ref_track.slices = drift_profile.slice_track(self.ref_track.gray, self.ref_track.points, self.ref_track.half_w, 0, 0)
 
         profile = drift_profile.slices_to_profile(self.ref_track.slices)
         err = np.sqrt(profile)
         self.ref_profile = DriftProfile(profile, err)
-        
+
         # draw reference track
         if self.ref_track is not None:
-            self.ref_track.draw((255,0,0), 0.5)
+            self.ref_track_rgb = self.ref_track.draw((255,0,0), 0.5)
 
         # draw tracks
         self._draw_tracks()
@@ -241,6 +246,7 @@ class DriftContext:
             self.notify_observers()
 
     def find_occ_profile(self):
+        self.occ_track.half_w = self.half_w
         self.occ_track.slices = drift_profile.slice_track(self.occ_track.gray,
                                                self.occ_track.points,
                                                self.occ_track.half_w,
@@ -481,6 +487,11 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
         ctl_panel = wx.Panel(self)
         ctl_panel.SetSizer(ctl_sizer)
 
+        self.half_w_input = wx.TextCtrl(ctl_panel)
+        self.half_w_input.SetValue(str(self.context.half_w))
+        self.half_w_input.Bind(wx.EVT_TEXT, self.SetHalfW)
+        ctl_sizer.Add(self.half_w_input, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
+
         build_mean_reference = wx.Button(ctl_panel, label="Build mean reference track")
         build_mean_reference.Bind(wx.EVT_BUTTON, self.BuildMeanReference)
         ctl_sizer.Add(build_mean_reference, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
@@ -490,6 +501,14 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
         ctl_sizer.Add(save_mean_reference, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
 
         main_sizer.Add(ctl_panel)
+
+    def SetHalfW(self, event):
+        text = event.GetString()
+        try:
+            value = int(text)
+            self.context.set_half_w(value)
+        except Exception as e:
+            pass
 
     def SaveReference(self, event):
         with wx.FileDialog(self, "Save reference profile", wildcard="CSV (*.csv)|*.csv",style=wx.FD_SAVE) as fileDialog:
@@ -536,6 +555,8 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
 
     def notify(self):
         self.UpdateImage()
+        self.half_w_input.ChangeValue(str(self.context.half_w))
+
 
 class OccultationTrackPanel(wx.Panel):
     def __init__(self, parent, context : DriftContext):
@@ -563,6 +584,11 @@ class OccultationTrackPanel(wx.Panel):
         ctl_panel = wx.Panel(self)
         ctl_panel.SetSizer(ctl_sizer)
 
+        self.half_w_input = wx.TextCtrl(ctl_panel)
+        self.half_w_input.SetValue(str(self.context.half_w))
+        self.half_w_input.Bind(wx.EVT_TEXT, self.SetHalfW)
+        ctl_sizer.Add(self.half_w_input, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
+
         build_mean_reference = wx.Button(ctl_panel, label="Analyze occultation track")
         build_mean_reference.Bind(wx.EVT_BUTTON, self.AnalyzeOccultation)
         ctl_sizer.Add(build_mean_reference, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
@@ -576,6 +602,14 @@ class OccultationTrackPanel(wx.Panel):
         ctl_sizer.Add(navigator, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
 
         main_sizer.Add(ctl_panel)
+
+    def SetHalfW(self, event):
+        text = event.GetString()
+        try:
+            value = int(text)
+            self.context.set_half_w(value)
+        except Exception as e:
+            pass
 
     def navigate(self, dx, dy):
         x = self.context.occ_track_pos[1]
@@ -629,7 +663,8 @@ class OccultationTrackPanel(wx.Panel):
 
     def notify(self):
         self.UpdateImage()
-
+        self.half_w_input.ChangeValue(str(self.context.half_w))
+        
 
 class DriftWindow(wx.Frame):
     def __init__(self, title : str, context : DriftContext):
