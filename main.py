@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple
 import wx
 import wx.lib.scrolledpanel as scrolled
 
@@ -128,8 +128,8 @@ class DriftContext:
         if self.occ_track_desc is not None:
             left,right,top,bottom = self.occ_track_desc
             # draw bounding rectangles
-            cv2.rectangle(self.rgb, (left,top), (right,bottom), color=(0,127,0), thickness=1)
-            cv2.rectangle(self.rgb, (left-self.margin,top-self.margin), (right+self.margin,bottom+self.margin), color=(0,127,0), thickness=1)
+            cv2.rectangle(self.rgb, (left,top), (right,bottom), color=(0,200,0), thickness=1)
+            cv2.rectangle(self.rgb, (left-self.margin,top-self.margin), (right+self.margin,bottom+self.margin), color=(0,200,0), thickness=1)
             if self.ref_points is not None:
                 # draw core line
                 for y,x in self.ref_points:
@@ -142,22 +142,29 @@ class DriftContext:
                     self.rgb[yy,xx,2] = 0
 
 
-    def _draw_track(self, track : np.ndarray, points : np.ndarray, normals : np.ndarray) -> np.ndarray:
+    def _draw_track(self, track : np.ndarray,
+                    points : np.ndarray,
+                    normals : np.ndarray | None,
+                    margin : int,
+                    color : Tuple[int,int,int],
+                    transparency : float) -> np.ndarray:
         # draw line of the track
         track_rgb = cv2.cvtColor(track.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+        color = np.array(color)
         for y, x in points:
-            track_rgb[int(y),int(x),0] = 255
+            track_rgb[int(y+margin),int(x+margin)] = track_rgb[int(y+margin),int(x+margin)] * transparency + color * (1-transparency)
 
         # draw normals
-        for index, ((y,x), (ny,nx)) in enumerate(zip(points, normals)):
-            if index % 10 != 0:
-                continue
-            x1 = int(x-nx*self.half_w)
-            y1 = int(y-ny*self.half_w)
-            x2 = int(x+nx*self.half_w)
-            y2 = int(y+ny*self.half_w)
+        if normals is not None:
+            for index, ((y,x), (ny,nx)) in enumerate(zip(points, normals)):
+                if index % 10 != 0:
+                    continue
+                x1 = int(x-nx*self.half_w+margin)
+                y1 = int(y-ny*self.half_w+margin)
+                x2 = int(x+nx*self.half_w+margin)
+                y2 = int(y+ny*self.half_w+margin)
 
-            cv2.line(track_rgb, (x1,y1), (x2,y2), (0,255,0), 1)
+                cv2.line(track_rgb, (x1,y1), (x2,y2), (0,200,0), 1)
         return track_rgb
 
     def detect_tracks(self):
@@ -183,7 +190,10 @@ class DriftContext:
         self.ref_low_poisson_err = drift_profile.smooth_track_profile(self.ref_profile - self.ref_poisson_err, self.smooth_err)
 
         # draw reference track
-        self.ref_track_rgb = self._draw_track(self.ref_track, self.ref_points, self.ref_normals)
+        self.ref_track_rgb = self._draw_track(self.ref_track, self.ref_points, self.ref_normals,
+                                              margin=0,
+                                              color=(255,0,0),
+                                              transparency=0.5)
 
         # draw tracks
         self._draw_tracks()
@@ -194,21 +204,29 @@ class DriftContext:
         self.ref_profile_rgb = plot_to_numpy(xr, [self.ref_profile, self.ref_low_poisson_err, self.ref_top_poisson_err], 640, 480)
         self.notify_observers()
 
-    def specify_occ_track(self):
-        self.occ_track_pos = (282, 297)
-        w = self.ref_track.shape[1]
-        h = self.ref_track.shape[0]
-        x0 = self.occ_track_pos[1]
-        y0 = self.occ_track_pos[0]
+    def specify_occ_track(self, x : int, y : int):
+        if self.ref_track is not None:
+            self.occ_track_pos = (y, x)
+            w = self.ref_track.shape[1]
+            h = self.ref_track.shape[0]
+            x0 = self.occ_track_pos[1]
+            y0 = self.occ_track_pos[0]
 
-        self.occ_track_desc = (x0, x0 + w, y0, y0 + h)
-        self.occ_track = drift_detect.extract_track(self.gray, x0, y0, w, h, self.margin)
-        self.occ_track_rgb = cv2.cvtColor(self.occ_track.astype(np.uint8), cv2.COLOR_GRAY2RGB)        
+            self.occ_track_desc = (x0, x0 + w, y0, y0 + h)
+            self.occ_track = drift_detect.extract_track(self.gray, x0, y0, w, h, self.margin)
+            self.occ_track_rgb = cv2.cvtColor(self.occ_track.astype(np.uint8), cv2.COLOR_GRAY2RGB)        
 
-        # draw tracks
-        self._draw_tracks()
+            # draw tracks
+            self._draw_tracks()
 
-        self.notify_observers()
+            # draw occultation track
+            self.occ_track_rgb = self._draw_track(self.occ_track, self.ref_points,
+                                                  normals=None,
+                                                  margin=self.margin,
+                                                  color=(0,200,0),
+                                                  transparency=0.5)
+
+            self.notify_observers()
 
     def find_occ_profile(self):
         self.occ_slices = drift_profile.slice_track(self.occ_track, self.ref_points, self.half_w, self.margin, 0)
@@ -240,11 +258,107 @@ class DriftContext:
 
         self.notify_observers()
 
+class NavigationPanel(wx.Panel):
+    def __init__(self, parent):
+        wx.Panel.__init__(self, parent)
+        self.observers = []
+        ctl_btn_sizer = wx.GridSizer(cols=3, rows=3, hgap=10, vgap=10)
+        self.SetSizer(ctl_btn_sizer)
+
+        self.held_x = 0
+        self.held_y = 0
+        self.repeat_delay = 20
+        self.first_delay = 400
+        self.timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.on_timer, self.timer)
+
+        size = wx.Size(32, 32)
+
+        # Up arrow (top row, middle column: row 0, col 1)
+        up_bitmap = wx.ArtProvider.GetBitmap(wx.ART_GO_UP, wx.ART_BUTTON, size)
+        up_button = wx.BitmapButton(self, id=wx.ID_ANY, bitmap=up_bitmap, size=(40, 40))
+        up_button.Bind(wx.EVT_LEFT_DOWN, self.on_up)
+        up_button.Bind(wx.EVT_LEFT_UP, self.on_release)
+
+        # Left arrow (middle row, left column: row 1, col 0)
+        left_bitmap = wx.ArtProvider.GetBitmap(wx.ART_GO_BACK, wx.ART_BUTTON, size)
+        left_button = wx.BitmapButton(self, id=wx.ID_ANY, bitmap=left_bitmap, size=(40, 40))
+        left_button.Bind(wx.EVT_LEFT_DOWN, self.on_left)
+        left_button.Bind(wx.EVT_LEFT_UP, self.on_release)
+
+        # Right arrow (middle row, right column: row 1, col 2)
+        right_bitmap = wx.ArtProvider.GetBitmap(wx.ART_GO_FORWARD, wx.ART_BUTTON, size)
+        right_button = wx.BitmapButton(self, id=wx.ID_ANY, bitmap=right_bitmap, size=(40, 40))
+        right_button.Bind(wx.EVT_LEFT_DOWN, self.on_right)
+        right_button.Bind(wx.EVT_LEFT_UP, self.on_release)
+
+        # Bottom arrow (bottom row, middle column: row 2, col 1)
+        down_bitmap = wx.ArtProvider.GetBitmap(wx.ART_GO_DOWN, wx.ART_BUTTON, size)
+        down_button = wx.BitmapButton(self, id=wx.ID_ANY, bitmap=down_bitmap, size=(40, 40))
+        down_button.Bind(wx.EVT_LEFT_DOWN, self.on_down)
+        down_button.Bind(wx.EVT_LEFT_UP, self.on_release)
+
+        # Row 0
+        ctl_btn_sizer.Add((0, 0), 0, wx.EXPAND)  # Empty (row 0, col 0)
+        ctl_btn_sizer.Add(up_button, 0, wx.ALIGN_CENTER)  # Up button (row 0, col 1)
+        ctl_btn_sizer.Add((0, 0), 0, wx.EXPAND)  # Empty (row 0, col 2)
+
+        # Row 1
+        ctl_btn_sizer.Add(left_button, 0, wx.ALIGN_CENTER)  # Left button (row 1, col 0)
+        ctl_btn_sizer.Add((0, 0), 0, wx.EXPAND)  # Empty (row 1, col 1)
+        ctl_btn_sizer.Add(right_button, 0, wx.ALIGN_CENTER)  # Right button (row 1, col 2)
+
+        # Row 2
+        ctl_btn_sizer.Add((0, 0), 0, wx.EXPAND)  # Empty (row 2, col 0)
+        ctl_btn_sizer.Add(down_button, 0, wx.ALIGN_CENTER)  # Bottom button (row 2, col 1)
+        ctl_btn_sizer.Add((0, 0), 0, wx.EXPAND)  # Empty (row 2, col 2)
+
+    def on_timer(self, event):
+        if self.held_x != 0 or self.held_y != 0:
+            self._notify()
+            self.timer.Start(self.repeat_delay, oneShot=True)
+
+    def on_up(self, event):
+        self.held_x = 0
+        self.held_y = -1
+        self._notify()
+        self.timer.Start(self.first_delay, oneShot=True)
+
+    def on_left(self, event):
+        self.held_x = -1
+        self.held_y = 0
+        self._notify()
+        self.timer.Start(self.first_delay, oneShot=True)
+
+    def on_right(self, event):
+        self.held_x = 1
+        self.held_y = 0
+        self._notify()
+        self.timer.Start(self.first_delay, oneShot=True)
+
+    def on_down(self, event):
+        self.held_x = 0
+        self.held_y = 1
+        self._notify()
+        self.timer.Start(self.first_delay, oneShot=True)
+
+    def on_release(self, event):
+        self.held_x = 0
+        self.held_y = 0
+
+    def add_observer(self, observer):
+        self.observers.append(observer)
+
+    def _notify(self):
+        for observer in self.observers:
+            observer.navigate(self.held_x, self.held_y)
+
 class DetectTracksPanel(wx.Panel, IObserver):
     def __init__(self, parent, context : DriftContext):
         wx.Panel.__init__(self, parent)
         self.context = context
         self.context.add_observer(self)
+
         main_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.SetSizer(main_sizer)
 
@@ -254,6 +368,7 @@ class DetectTracksPanel(wx.Panel, IObserver):
 
         self.empty_img = wx.Image(600, 600)
         self.imageCtrl = wx.StaticBitmap(image_panel, wx.ID_ANY, wx.Bitmap(self.empty_img))
+        self.imageCtrl.Bind(wx.EVT_LEFT_DOWN, self.on_bitmap_click)
 
         ctl_sizer = wx.BoxSizer(wx.VERTICAL)
         ctl_panel = wx.Panel(self)
@@ -261,21 +376,41 @@ class DetectTracksPanel(wx.Panel, IObserver):
 
         auto_detect_references = wx.Button(ctl_panel, label="Auto detect references")
         auto_detect_references.Bind(wx.EVT_BUTTON, self.AutoDetectTracks)
-        ctl_sizer.Add(auto_detect_references)
+        ctl_sizer.Add(auto_detect_references, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
 
         specify_occultation = wx.Button(ctl_panel, label="Specify occultation")
         specify_occultation.Bind(wx.EVT_BUTTON, self.SpecifyOccultationTrack)
-        ctl_sizer.Add(specify_occultation)
+        ctl_sizer.Add(specify_occultation, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
+
+        navigator = NavigationPanel(ctl_panel)
+        navigator.add_observer(self)
+        ctl_sizer.Add(navigator, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, border=10)
 
         main_sizer.Add(ctl_panel)
+
+    def on_bitmap_click(self, event):
+        x, y = event.GetPosition()
+        self.context.specify_occ_track(x, y)
+
+    def navigate(self, dx, dy):
+        x = self.context.occ_track_pos[1]
+        y = self.context.occ_track_pos[0]
+        self.context.specify_occ_track(x + dx, y + dy)
+
 
     def AutoDetectTracks(self, event):
         self.context.detect_tracks()
         self.context.build_reference_track()
-        self.context.specify_occ_track()
+
+        w = self.context.gray.shape[1]
+        h = self.context.gray.shape[0]
+        rw = self.context.ref_track.shape[1]
+        rh = self.context.ref_track.shape[0]
+        self.context.specify_occ_track(int(w/2-rw/2), int(h/2-rh/2))
 
     def SpecifyOccultationTrack(self, event):
-        self.context.specify_occ_track()
+        #self.context.specify_occ_track()
+        pass
 
     def UpdateImage(self):
         if self.context.gray is None:
@@ -387,7 +522,16 @@ class OccultationTrackPanel(wx.Panel):
         build_mean_reference.Bind(wx.EVT_BUTTON, self.AnalyzeOccultation)
         ctl_sizer.Add(build_mean_reference)
 
+        navigator = NavigationPanel(ctl_panel)
+        navigator.add_observer(self)
+        ctl_sizer.Add(navigator, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, border=10)
+
         main_sizer.Add(ctl_panel)
+
+    def navigate(self, dx, dy):
+        x = self.context.occ_track_pos[1]
+        y = self.context.occ_track_pos[0]
+        self.context.specify_occ_track(x + dx, y + dy)
 
     def AnalyzeOccultation(self, event):
         self.context.find_occ_profile()
@@ -469,15 +613,15 @@ class DriftWindow(wx.Frame):
 
 context = DriftContext()
 
-app = wx.App(redirect=True)
+app = wx.App(redirect=False)
 top = DriftWindow(title="Drift analyzer", context=context)
 top.Show()
 app.MainLoop()
 sys.exit()
 
 smooth_err = 15
-margin = 20
-half_w = 3
+half_w = 4
+margin = half_w*5
 
 gray = np.array(Image.open('examples/westphalia.png').convert('L'))
 
