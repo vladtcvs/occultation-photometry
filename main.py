@@ -273,8 +273,6 @@ class DriftContext:
         sky_average = np.average(occ_profile_conn)
         sky_stdev = np.std(occ_profile_conn)
 
-        print(sky_average, sky_stdev)
-
         # Profile without sky glow
         occ_profile_clear = self.occ_profile_raw.profile - sky_average
         occ_total_err = np.sqrt(sky_stdev**2 + occ_poisson_err**2)
