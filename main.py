@@ -66,10 +66,6 @@ def plot_to_numpy(xrange, datas, width=800, height=600, dpi=100):
     return img_array
 
 class DriftTrack:
-    left : int = None
-    right : int = None
-    top : int = None
-    bottom : int = None
     half_w : int = 0
     slices : np.ndarray = None
 
