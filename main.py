@@ -660,15 +660,13 @@ class OccultationTrackPanel(wx.Panel):
                 for index, value, error in zip(ids, values, errors):
                     writer.writerow([index, value, error])
 
-
     def notify(self):
         self.UpdateImage()
         self.half_w_input.ChangeValue(str(self.context.half_w))
-        
 
 class DriftWindow(wx.Frame):
     def __init__(self, title : str, context : DriftContext):
-        wx.Frame.__init__(self, None, title=title, size=(1000,800))
+        wx.Frame.__init__(self, None, title=title, size=(1200,800))
         self.context = context
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         menuBar = wx.MenuBar()
