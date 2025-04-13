@@ -1,3 +1,4 @@
+from typing import List, Tuple
 import numpy as np
 import math
 
@@ -97,6 +98,51 @@ def slices_to_profile(slices : np.ndarray) -> np.ndarray:
     profile = value / weight * width
     profile[np.where(np.isnan(profile))] = 0
     return profile
+
+def calculate_sky_profile(side_profiles : List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+    """Calculate sky profile parallel to track.
+       We use linear polynomial approximation for true sky brighness along track
+       I_sky(s) = a*s + b,
+       where s is a index along track
+       """
+    L = side_profiles[0].shape[0]
+    N = len(side_profiles)
+    xs = np.zeros((L*N,))
+    ys = np.zeros((L*N,))
+    for s in range(L):
+        for n in range(N):
+            xs[s*N+n] = s
+            ys[s*N+n] = side_profiles[n][s]
+    polynom = np.polynomial.Polynomial.fit(xs, ys, 1)
+    values = polynom(xs)
+    ds = ys - values
+    stdev_val = np.sqrt(np.mean(ds**2))
+    stdev = np.ones((L,))*stdev_val
+    xs = np.array(range(L))
+    values = polynom(xs)
+    return values, stdev
+    
+
+def calculate_drift_profile(drift_profile_raw : np.ndarray,
+                            side_profiles : List[np.ndarray],
+                            reference_profile : np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    L = drift_profile_raw.shape[0]
+
+    # scale factor to compenste varying star over track speed
+    ref_average = np.mean(reference_profile)
+    scale = smooth_track_profile(ref_average / reference_profile, int(L/8))
+
+    # average sky profile parallel to occ profile
+    sky_profile, sky_stdev = calculate_sky_profile(side_profiles)
+
+    # remove sky profile and compensate star speed
+    drift_profile = (drift_profile_raw - sky_profile) * scale
+
+    # estimate errors
+    smoothed = smooth_track_profile(drift_profile, 3)
+    delta = np.sqrt(np.sum((smoothed - drift_profile)**2)/L)
+    err = np.ones((L,))*delta
+    return drift_profile, np.sqrt(sky_stdev**2+err**2)
 
 def reference_profile_time_analyze(profile : np.ndarray) -> np.ndarray:
     """Find such time of each point of profile, that stretching profile according to such times, make it flat"""

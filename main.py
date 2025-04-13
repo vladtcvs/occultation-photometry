@@ -115,7 +115,7 @@ class DriftTrack:
         return rgb
 
 class DriftProfile:
-    def __init__(self, profile, error):
+    def __init__(self, profile : np.ndarray, error : np.ndarray):
         self.profile = profile
         self.error = error
 
@@ -135,29 +135,44 @@ class DriftContext:
     def __init__(self):
         self.observers : List[IObserver] = []
 
+        # original frame
         self.gray = None
+
+        # reference track half width
         self.ref_half_w = 5
+
+        # occultation track half width
         self.occ_half_w = 5
-        self.margin = 10
+        self.occ_margin = 10
+
+        # smoothing error of profile
         self.smooth_err = 21
 
-        self.reference_tracks = []
+        # list of reference tracks
+        self.reference_tracks : List[DriftTrack] = []
 
+        # average reference track
         self.ref_track : DriftTrack = None
         self.ref_track_rgb = None
 
+        # average reference profile
         self.ref_profile : DriftProfile = None
         self.ref_profile_rgb = None
         self.ref_slices_rgb = None
 
+        # occultation track
         self.occ_track : DriftTrack = None
         self.occ_track_desc = None
         self.occ_track_rgb = None
 
-        self.occ_sub_sky : bool = True
+        # occultation profile
         self.occ_profile : DriftProfile = None
         self.occ_profile_rgb = None
         self.occ_slices_rgb = None
+
+        # restore true reference profile
+        self.build_true_occ_profile : bool = True
+
 
     def add_observer(self, observer : IObserver):
         self.observers.append(observer)
@@ -204,7 +219,7 @@ class DriftContext:
 
             # draw bounding rectangles
             cv2.rectangle(self.rgb, (left,top), (right,bottom), color=(0,200,0), thickness=1)
-            cv2.rectangle(self.rgb, (left-self.margin,top-self.margin), (right+self.margin,bottom+self.margin), color=(0,200,0), thickness=1)
+            cv2.rectangle(self.rgb, (left-self.occ_margin,top-self.occ_margin), (right+self.occ_margin,bottom+self.occ_margin), color=(0,200,0), thickness=1)
     
     def detect_tracks(self):
         self.reference_tracks = drift_detect.detect_reference_tracks(self.gray, 9, [2, 1.2])
@@ -259,8 +274,8 @@ class DriftContext:
             y0 = self.occ_track_pos[0]
 
             self.occ_track_desc = (x0, x0 + w, y0, y0 + h)
-            occ_track = drift_detect.extract_track(self.gray, x0, y0, w, h, self.margin)
-            self.occ_track = DriftTrack(occ_track, self.margin, self.ref_track.points, None, self.ref_track.transposed)
+            occ_track = drift_detect.extract_track(self.gray, x0, y0, w, h, self.occ_margin)
+            self.occ_track = DriftTrack(occ_track, self.occ_margin, self.ref_track.points, None, self.ref_track.transposed)
             self.occ_track.half_w = self.occ_half_w
 
             self.occ_track_rgb = self.occ_track.draw((0,200,0),0.5)
@@ -270,45 +285,34 @@ class DriftContext:
 
             self.notify_observers()
 
-    def find_occ_profile(self):
+    def analyze_occ_track(self):
         self.occ_track.half_w = self.occ_half_w
         self.occ_track.slices = drift_profile.slice_track(self.occ_track.gray,
                                                self.occ_track.points,
                                                self.occ_track.half_w,
                                                self.occ_track.margin,
                                                0)
-        occ_slices_offset_1 = drift_profile.slice_track(self.occ_track.gray,
+        
+        side_profiles = []
+        for i in (-4,-2,2,4):
+            occ_slices_offset = drift_profile.slice_track(self.occ_track.gray,
                                                         self.occ_track.points,
                                                         self.occ_track.half_w,
                                                         self.occ_track.margin,
-                                                        -3*self.occ_track.half_w)
-        occ_slices_offset_2 = drift_profile.slice_track(self.occ_track.gray,
-                                                        self.occ_track.points,
-                                                        self.occ_track.half_w,
-                                                        self.occ_track.margin,
-                                                        3*self.occ_track.half_w)
-
+                                                        i*self.occ_track.half_w)
+            occ_profile_offset = drift_profile.slices_to_profile(occ_slices_offset)
+            side_profiles.append(occ_profile_offset)
+    
         # profile of track
         occ_profile_raw = drift_profile.slices_to_profile(self.occ_track.slices)
-        occ_poisson_err = np.sqrt(occ_profile_raw)
-        occ_profile_raw = DriftProfile(occ_profile_raw, occ_poisson_err)
-
-        # profiles of paths parallel to track
-        occ_profile_1 = drift_profile.slices_to_profile(occ_slices_offset_1)
-        occ_profile_2 = drift_profile.slices_to_profile(occ_slices_offset_2)
-
-        # average sky value and error of sky brightness
-        occ_profile_conn = np.concatenate([occ_profile_1, occ_profile_2], axis=0)
-        sky_average = np.average(occ_profile_conn)
-        sky_stdev = np.std(occ_profile_conn)
-        occ_total_err = np.sqrt(sky_stdev**2 + occ_poisson_err**2)
 
         # Profile without sky glow
-        if self.occ_sub_sky:
-            occ_profile_clear = occ_profile_raw.profile - sky_average
-            self.occ_profile = DriftProfile(occ_profile_clear, occ_total_err)
+        if self.build_true_occ_profile:
+            occ_profile, occ_profile_stdev = drift_profile.calculate_drift_profile(occ_profile_raw, side_profiles, self.ref_profile.profile)
+            self.occ_profile = DriftProfile(occ_profile, occ_profile_stdev)
         else:
-            self.occ_profile = DriftProfile(occ_profile_raw.profile, occ_total_err)
+            _, sky_stdev = drift_profile.calculate_sky_profile(side_profiles)
+            self.occ_profile = DriftProfile(occ_profile_raw, sky_stdev)
 
         # build occultation track plot
         self.occ_profile_rgb = self.occ_profile.plot_profile(640, 480, self.smooth_err)
@@ -643,7 +647,7 @@ class OccultationTrackPanel(wx.Panel):
         ctl_panel.SetSizer(ctl_sizer)
 
         plot_without_sky = wx.CheckBox(ctl_panel, label="Remove average sky value")
-        plot_without_sky.SetValue(self.context.occ_sub_sky)
+        plot_without_sky.SetValue(self.context.build_true_occ_profile)
         plot_without_sky.Bind(wx.EVT_CHECKBOX, self.PlotWithoutSky)
         ctl_sizer.Add(plot_without_sky, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
 
@@ -667,7 +671,7 @@ class OccultationTrackPanel(wx.Panel):
         main_sizer.Add(ctl_panel)
 
     def PlotWithoutSky(self, event : wx.CommandEvent):
-        self.context.occ_sub_sky = event.IsChecked()
+        self.context.build_true_occ_profile = event.IsChecked()
 
     def SetOccHalfW(self, event : wx.CommandEvent):
         text = event.GetString()
@@ -683,7 +687,7 @@ class OccultationTrackPanel(wx.Panel):
         self.context.specify_occ_track(x + dx, y + dy)
 
     def AnalyzeOccultation(self, event):
-        self.context.find_occ_profile()
+        self.context.analyze_occ_track()
 
     def UpdateImage(self):
         if self.context.occ_track_rgb is not None:
