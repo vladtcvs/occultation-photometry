@@ -154,6 +154,7 @@ class DriftContext:
         self.occ_track_desc = None
         self.occ_track_rgb = None
 
+        self.occ_sub_sky : bool = True
         self.occ_profile : DriftProfile = None
         self.occ_profile_rgb = None
         self.occ_slices_rgb = None
@@ -300,11 +301,14 @@ class DriftContext:
         occ_profile_conn = np.concatenate([occ_profile_1, occ_profile_2], axis=0)
         sky_average = np.average(occ_profile_conn)
         sky_stdev = np.std(occ_profile_conn)
+        occ_total_err = np.sqrt(sky_stdev**2 + occ_poisson_err**2)
 
         # Profile without sky glow
-        occ_profile_clear = occ_profile_raw.profile - sky_average
-        occ_total_err = np.sqrt(sky_stdev**2 + occ_poisson_err**2)
-        self.occ_profile = DriftProfile(occ_profile_clear, occ_total_err)
+        if self.occ_sub_sky:
+            occ_profile_clear = occ_profile_raw.profile - sky_average
+            self.occ_profile = DriftProfile(occ_profile_clear, occ_total_err)
+        else:
+            self.occ_profile = DriftProfile(occ_profile_raw.profile, occ_total_err)
 
         # build occultation track plot
         self.occ_profile_rgb = self.occ_profile.plot_profile(640, 480, self.smooth_err)
@@ -638,6 +642,11 @@ class OccultationTrackPanel(wx.Panel):
         ctl_panel = wx.Panel(self)
         ctl_panel.SetSizer(ctl_sizer)
 
+        plot_without_sky = wx.CheckBox(ctl_panel, label="Remove average sky value")
+        plot_without_sky.SetValue(self.context.occ_sub_sky)
+        plot_without_sky.Bind(wx.EVT_CHECKBOX, self.PlotWithoutSky)
+        ctl_sizer.Add(plot_without_sky, proportion=0, flag=wx.EXPAND | wx.ALL, border=10)
+
         self.half_w_input = wx.TextCtrl(ctl_panel)
         self.half_w_input.SetValue(str(self.context.occ_half_w))
         self.half_w_input.Bind(wx.EVT_TEXT, self.SetOccHalfW)
@@ -657,7 +666,10 @@ class OccultationTrackPanel(wx.Panel):
 
         main_sizer.Add(ctl_panel)
 
-    def SetOccHalfW(self, event):
+    def PlotWithoutSky(self, event : wx.CommandEvent):
+        self.context.occ_sub_sky = event.IsChecked()
+
+    def SetOccHalfW(self, event : wx.CommandEvent):
         text = event.GetString()
         try:
             value = int(text)
@@ -783,102 +795,3 @@ top = DriftWindow(title="Drift analyzer", context=context)
 top.Show()
 app.MainLoop()
 sys.exit()
-
-smooth_err = 15
-half_w = 4
-margin = half_w*5
-
-gray = np.array(Image.open('examples/westphalia.png').convert('L'))
-
-ref_track, points, transposed = drift_detect.build_reference_track(gray)
-ref_slices = drift_profile.slice_track(ref_track, points, half_w, 0, 0)
-
-x0 = 297
-y0 = 282
-w = ref_track.shape[1]
-h = ref_track.shape[0]
-
-occ_track = drift_detect.extract_track(gray, x0, y0, w, h, margin)
-occ_slices = drift_profile.slice_track(occ_track, points, half_w, margin, 0)
-occ_slices_offset_1 = drift_profile.slice_track(occ_track, points, half_w, margin, -2*half_w)
-occ_slices_offset_2 = drift_profile.slice_track(occ_track, points, half_w, margin, 2*half_w)
-
-# reference track profile
-ref_profile = drift_profile.slices_to_profile(ref_slices)
-ref_poisson_err = np.sqrt(ref_profile)
-ref_top_poisson_err = drift_profile.smooth_track_profile(ref_profile + ref_poisson_err, smooth_err)
-ref_low_poisson_err = drift_profile.smooth_track_profile(ref_profile - ref_poisson_err, smooth_err)
-
-
-# occultation profile and poisson deviation
-occ_profile = drift_profile.slices_to_profile(occ_slices)
-occ_poisson_err = np.sqrt(occ_profile)
-
-# profiles of paths parallel to track
-occ_profile_1 = drift_profile.slices_to_profile(occ_slices_offset_1)
-occ_profile_2 = drift_profile.slices_to_profile(occ_slices_offset_2)
-
-# average sky value and error of sky brightness
-occ_profile_conn = np.concatenate([occ_profile_1, occ_profile_2], axis=0)
-sky_average = np.average(occ_profile_conn)
-sky_stdev = np.std(occ_profile_conn)
-
-
-occ_clear_profile = occ_profile - sky_average
-
-
-occ_top_sky_err = drift_profile.smooth_track_profile(occ_clear_profile + sky_stdev, smooth_err)
-occ_low_sky_err = drift_profile.smooth_track_profile(occ_clear_profile - sky_stdev, smooth_err)
-
-occ_top_poisson_err = drift_profile.smooth_track_profile(occ_clear_profile + occ_poisson_err, smooth_err)
-occ_low_poisson_err = drift_profile.smooth_track_profile(occ_clear_profile - occ_poisson_err, smooth_err)
-
-occ_total_err = np.sqrt(sky_stdev**2 + occ_poisson_err**2)
-occ_top_total_err = drift_profile.smooth_track_profile(occ_clear_profile + occ_total_err, smooth_err)
-occ_low_total_err = drift_profile.smooth_track_profile(occ_clear_profile - occ_total_err, smooth_err)
-
-
-#gray_rgb = cv2.cvtColor(gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
-ref_track_rgb = cv2.cvtColor(ref_track.astype(np.uint8), cv2.COLOR_GRAY2RGB)
-occ_track_rgb = cv2.cvtColor(occ_track.astype(np.uint8), cv2.COLOR_GRAY2RGB)
-
-for y,x in points:
-    ref_track_rgb[int(y),int(x),0] = 255
-    #occ_track_rgb[y+half_w,x+half_w,0] = 255
-
-if False:
-    fig, axs = plt.subplots(1,6)
-    axs[0].imshow(occ_track_rgb)
-    axs[1].imshow(ref_track_rgb)
-    axs[2].imshow(ref_slices, cmap='gray')
-    axs[3].imshow(occ_slices, cmap='gray')
-    axs[4].imshow(occ_slices_offset_1, cmap='gray')
-    axs[5].imshow(occ_slices_offset_2, cmap='gray')
-    plt.show()
-
-L = len(occ_clear_profile)
-xr = range(L)
-
-if False:
-    fig, axs = plt.subplots(2,2)
-    axs[0,0].plot(xr, ref_profile, xr, ref_top_poisson_err, xr, ref_low_poisson_err)
-    axs[0,0].set_title("Reference track")
-
-    axs[0,1].plot(xr, occ_clear_profile, xr, occ_top_sky_err, xr, occ_low_sky_err)
-    axs[0,1].set_title("Error of light pollution")
-
-    axs[1,0].plot(xr, occ_clear_profile, xr, occ_top_poisson_err, xr, occ_low_poisson_err)
-    axs[1,0].set_title("Error of poisson")
-
-    axs[1,1].plot(xr, occ_clear_profile, xr, occ_top_total_err, xr, occ_low_total_err)
-    axs[1,1].set_title("Total error")
-    plt.show()
-
-dtimes = drift_profile.reference_profile_time_analyze(ref_profile)
-occ_fixed_profile = drift_profile.profile_according_to_time(occ_clear_profile, dtimes)
-
-fig, axs = plt.subplots(1,3)
-axs[0].plot(xr, ref_profile)
-axs[1].plot(xr, dtimes)
-axs[2].plot(xr, occ_fixed_profile)
-plt.show()
