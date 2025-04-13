@@ -38,18 +38,18 @@ def build_track_normals(points : np.ndarray)-> np.ndarray:
         normals[x,1] = nx
     return normals
 
-def interpolate(v1 : float | None, v2 : float | None, k):
-    if v1 is None:
+def interpolate(v1 : float, v2 : float, k):
+    if np.isnan(v1):
         return v2
-    if v2 is None:
+    if np.isnan(v2):
         return v1
     return v1*(1-k)+v2*k
 
 def _getpixel(track : np.ndarray, y : int, x : int):
     if x < 0 or y < 0:
-        return None
+        return np.nan
     if x >= track.shape[1] or y >= track.shape[0]:
-        return None
+        return np.nan
     return track[y,x]
 
 def getpixel(track : np.ndarray, y : float, x : float) -> float:
@@ -94,7 +94,9 @@ def slices_to_profile(slices : np.ndarray) -> np.ndarray:
     width = slices.shape[1]
     slices[np.where(np.isnan(slices))] = 0
     value = np.sum(slices, axis=1)
-    return value / weight * width
+    profile = value / weight * width
+    profile[np.where(np.isnan(profile))] = 0
+    return profile
 
 def reference_profile_time_analyze(profile : np.ndarray) -> np.ndarray:
     """Find such time of each point of profile, that stretching profile according to such times, make it flat"""
