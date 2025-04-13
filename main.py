@@ -102,12 +102,24 @@ class DriftTrack:
                 cv2.line(rgb, (x1,y1), (x2,y2), (0,200,0), 1)
         return rgb
 
+    def plot_slice(self, w : int, h : int, layer : int = -1):
+        xr = range(2*self.half_w+1)
+        if layer == -1:
+            values = np.mean(self.slices, axis=0)
+            top = np.amax(self.slices, axis=0)
+            low = np.amin(self.slices, axis=0)
+            rgb = plot_to_numpy(xr, [values, top, low], w, h)
+        else:
+            values = self.slices[layer]
+            rgb = plot_to_numpy(xr, [values], w, h)
+        return rgb
+
 class DriftProfile:
     def __init__(self, profile, error):
         self.profile = profile
         self.error = error
 
-    def plot(self, w : int, h : int, smooth_err : int = 0):
+    def plot_profile(self, w : int, h : int, smooth_err : int = 0):
         L = self.profile.shape[0]
         xr = range(L)
         if smooth_err == 0:
@@ -117,6 +129,7 @@ class DriftProfile:
             bottom = drift_profile.smooth_track_profile(self.profile - self.error, smooth_err)
             rgb = plot_to_numpy(xr, [self.profile, top, bottom], w, h)
         return rgb
+
 
 class DriftContext:
     def __init__(self):
@@ -134,6 +147,7 @@ class DriftContext:
 
         self.ref_profile : DriftProfile = None
         self.ref_profile_rgb = None
+        self.ref_slices_rgb = None
 
         self.occ_track : DriftTrack = None
         self.occ_track_desc = None
@@ -141,6 +155,7 @@ class DriftContext:
 
         self.occ_profile : DriftProfile = None
         self.occ_profile_rgb = None
+        self.occ_slices_rgb = None
 
     def add_observer(self, observer : IObserver):
         self.observers.append(observer)
@@ -222,7 +237,11 @@ class DriftContext:
         self._draw_tracks()
 
         # build reference track plot
-        self.ref_profile_rgb = self.ref_profile.plot(640, 480, self.smooth_err)
+        self.ref_profile_rgb = self.ref_profile.plot_profile(640, 480, self.smooth_err)
+
+        # build reference track mean slice
+        self.ref_slices_rgb = self.ref_track.plot_slice(640, 480)
+
         self.notify_observers()
 
     def specify_occ_track(self, x : int, y : int):
@@ -283,7 +302,10 @@ class DriftContext:
         self.occ_profile = DriftProfile(occ_profile_clear, occ_total_err)
 
         # build occultation track plot
-        self.occ_profile_rgb = self.occ_profile.plot(640, 480, self.smooth_err)
+        self.occ_profile_rgb = self.occ_profile.plot_profile(640, 480, self.smooth_err)
+
+        # build reference track mean slice
+        self.occ_slices_rgb = self.occ_track.plot_slice(640, 480)
 
         self.notify_observers()
 
@@ -473,15 +495,24 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
         image_panel.SetupScrolling()
         
         self.empty_img = wx.Image(240, 480)
-        self.imageCtrl = wx.StaticBitmap(image_panel, wx.ID_ANY, wx.Bitmap(self.empty_img))
+        self.ref_track_ctrl = wx.StaticBitmap(image_panel, wx.ID_ANY, wx.Bitmap(self.empty_img))
         
         main_sizer.Add(image_panel)
 
-        ref_profile_panel = wx.Panel(self)
-        self.empty_ref_profile_img = wx.Image(640,480)
-        self.refProfileCtrl = wx.StaticBitmap(ref_profile_panel, wx.ID_ANY, wx.Bitmap(self.empty_ref_profile_img))
-        
-        main_sizer.Add(ref_profile_panel)
+        plot_panel = wx.Panel(self)
+        plot_sizer = wx.BoxSizer(wx.VERTICAL)
+        plot_panel.SetSizer(plot_sizer)
+        main_sizer.Add(plot_panel)
+
+        ref_profile_panel = wx.Panel(plot_panel)
+        empty_ref_profile_img = wx.Image(640,480)
+        self.ref_profile_ctrl = wx.StaticBitmap(ref_profile_panel, wx.ID_ANY, wx.Bitmap(empty_ref_profile_img))
+        plot_sizer.Add(ref_profile_panel)
+
+        ref_slices_panel = wx.Panel(plot_panel)
+        empty_ref_slices_img = wx.Image(640,480)
+        self.ref_slices_ctrl = wx.StaticBitmap(ref_slices_panel, wx.ID_ANY, wx.Bitmap(empty_ref_slices_img))
+        plot_sizer.Add(ref_slices_panel)
 
         ctl_sizer = wx.BoxSizer(wx.VERTICAL)
         ctl_panel = wx.Panel(self)
@@ -538,8 +569,8 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
             image = wx.Image(width, height)
             image.SetData(data)
             gray_bitmap = image.ConvertToBitmap()
-            self.imageCtrl.SetBitmap(gray_bitmap)
-            self.imageCtrl.Refresh()
+            self.ref_track_ctrl.SetBitmap(gray_bitmap)
+            self.ref_track_ctrl.Refresh()
 
         if self.context.ref_profile_rgb is not None:
             height, width = self.context.ref_profile_rgb.shape[:2]
@@ -547,8 +578,17 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
             image = wx.Image(width, height)
             image.SetData(data)
             gray_bitmap = image.ConvertToBitmap()
-            self.refProfileCtrl.SetBitmap(gray_bitmap)
-            self.refProfileCtrl.Refresh()
+            self.ref_profile_ctrl.SetBitmap(gray_bitmap)
+            self.ref_profile_ctrl.Refresh()
+
+        if self.context.ref_slices_rgb is not None:
+            height, width = self.context.ref_slices_rgb.shape[:2]
+            data = self.context.ref_slices_rgb.tobytes()
+            image = wx.Image(width, height)
+            image.SetData(data)
+            gray_bitmap = image.ConvertToBitmap()
+            self.ref_slices_ctrl.SetBitmap(gray_bitmap)
+            self.ref_slices_ctrl.Refresh()
 
         self.Layout()
         self.Refresh()
@@ -574,11 +614,20 @@ class OccultationTrackPanel(wx.Panel):
         
         main_sizer.Add(image_panel)
 
-        ref_profile_panel = wx.Panel(self)
-        self.empty_occ_profile_img = wx.Image(640,480)
-        self.occProfileCtrl = wx.StaticBitmap(ref_profile_panel, wx.ID_ANY, wx.Bitmap(self.empty_occ_profile_img))
+        plot_panel = wx.Panel(self)
+        plot_sizer = wx.BoxSizer(wx.VERTICAL)
+        plot_panel.SetSizer(plot_sizer)
+        main_sizer.Add(plot_panel)
 
-        main_sizer.Add(ref_profile_panel)
+        occ_profile_panel = wx.Panel(plot_panel)
+        empty_occ_profile_img = wx.Image(640,480)
+        self.occ_profile_ctrl = wx.StaticBitmap(occ_profile_panel, wx.ID_ANY, wx.Bitmap(empty_occ_profile_img))
+        plot_sizer.Add(occ_profile_panel)
+
+        occ_slices_panel = wx.Panel(plot_panel)
+        empty_occ_slices_img = wx.Image(640,480)
+        self.occ_slices_ctrl = wx.StaticBitmap(occ_slices_panel, wx.ID_ANY, wx.Bitmap(empty_occ_slices_img))
+        plot_sizer.Add(occ_slices_panel)
 
         ctl_sizer = wx.BoxSizer(wx.VERTICAL)
         ctl_panel = wx.Panel(self)
@@ -635,8 +684,18 @@ class OccultationTrackPanel(wx.Panel):
             image = wx.Image(width, height)
             image.SetData(data)
             gray_bitmap = image.ConvertToBitmap()
-            self.occProfileCtrl.SetBitmap(gray_bitmap)
-            self.occProfileCtrl.Refresh()
+            self.occ_profile_ctrl.SetBitmap(gray_bitmap)
+            self.occ_profile_ctrl.Refresh()
+
+        if self.context.occ_slices_rgb is not None:
+            height, width = self.context.occ_slices_rgb.shape[:2]
+            data = self.context.occ_slices_rgb.tobytes()
+            image = wx.Image(width, height)
+            image.SetData(data)
+            gray_bitmap = image.ConvertToBitmap()
+            self.occ_slices_ctrl.SetBitmap(gray_bitmap)
+            self.occ_slices_ctrl.Refresh()
+
 
         self.Layout()
         self.Refresh()
