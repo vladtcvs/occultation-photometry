@@ -141,7 +141,7 @@ class DriftContext:
         self.mean_ref_track.normals = drift_slice.build_track_normals(self.mean_ref_track.points)
 
         # analyze each reference track and find it's profile
-        self.ref_profiles = []
+        self.ref_profiles : List[np.ndarray] = []
         for ref_track_rect in self.reference_tracks:
             track, _ = ref_track_rect.extract_track(self.gray, 0)
             # use mean points and normals
@@ -216,14 +216,14 @@ class DriftContext:
         occ_profile_raw = drift_slice.slices_to_profile(self.occ_track.slices)
 
         # Profile without sky glow
-#        if self.build_true_occ_profile:
-#            occ_profile, occ_profile_stdev = drift_profile.calculate_drift_profile(occ_profile_raw, side_profiles, self.mean_ref_profile.profile)
-#            self.occ_profile = DriftProfile(occ_profile, occ_profile_stdev)
-#        else:
-#            _, sky_stdev = drift_slice.calculate_sky_profile(side_profiles)
-#            self.occ_profile = DriftProfile(occ_profile_raw, sky_stdev)
-
-        self.occ_profile = DriftProfile(occ_profile_raw, np.zeros(occ_profile_raw.shape[0]))
+        if self.build_true_occ_profile:
+            occ_profile, occ_profile_stdev = drift_profile.calculate_true_drift_profile(occ_profile_raw,
+                                                                                        side_profiles,
+                                                                                        self.ref_profiles)
+            self.occ_profile = DriftProfile(occ_profile, occ_profile_stdev)
+        else:
+            _, sky_stdev = drift_profile.calculate_sky_profile(side_profiles)
+            self.occ_profile = DriftProfile(occ_profile_raw, sky_stdev)
 
         # build occultation track plot
         self.occ_profile_rgb = self.occ_profile.plot_profile(640, 480, self.smooth_err)
