@@ -151,6 +151,9 @@ class DriftContext:
         # list of reference tracks
         self.reference_tracks : List[DriftTrack] = []
 
+        # list of sky tracks
+        self.sky_tracks : List[DriftTrack] = []
+
         # average reference track
         self.ref_track : DriftTrack = None
         self.ref_track_rgb = None
@@ -244,11 +247,17 @@ class DriftContext:
     def analyze_reference_track(self):
         self.ref_track.half_w = self.ref_half_w
         self.ref_track.normals = drift_profile.build_track_normals(self.ref_track.points)
-        self.ref_track.slices = drift_profile.slice_track(self.ref_track.gray, self.ref_track.points, self.ref_track.half_w, 0, 0)
 
-        profile = drift_profile.slices_to_profile(self.ref_track.slices)
-        err = np.sqrt(profile)
-        self.ref_profile = DriftProfile(profile, err)
+        # analyze each reference track and find it's profile
+        self.ref_profiles = []
+        for ref_track in self.reference_tracks:
+            ref_track.slices = drift_profile.slice_track(ref_track.gray, self.ref_track.points, self.ref_track.half_w, 0, 0)
+            profile = drift_profile.slices_to_profile(ref_track.slices)
+            self.ref_profiles.append(profile)
+
+        # find mean reference track
+        ref_profile, ref_stdev = drift_profile.calculate_reference_profile(self.ref_profiles)
+        self.ref_profile = DriftProfile(ref_profile, ref_stdev)
 
         # draw reference track
         if self.ref_track is not None:
@@ -257,7 +266,7 @@ class DriftContext:
         # draw tracks
         self._draw_tracks()
 
-        # build reference track plot
+        # build reference profile plot
         self.ref_profile_rgb = self.ref_profile.plot_profile(640, 480, self.smooth_err)
 
         # build reference track mean slice

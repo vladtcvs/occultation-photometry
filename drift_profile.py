@@ -99,20 +99,37 @@ def slices_to_profile(slices : np.ndarray) -> np.ndarray:
     profile[np.where(np.isnan(profile))] = 0
     return profile
 
-def calculate_sky_profile(side_profiles : List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+def calculate_reference_profile(reference_profiles : List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+    """Calculate mean reference profile
+    """
+    L = reference_profiles[0].shape[0]
+    mean_profile = np.zeros((L,))
+    N = len(reference_profiles)
+    for n in range(N):
+        mean_profile += reference_profiles[n]
+    mean_profile /= np.mean(mean_profile)
+    errs = np.zeros((L,))
+    for n in range(N):
+        profile = reference_profiles[n]
+        profile = profile / np.mean(profile)
+        errs += (profile - mean_profile)**2/N
+    errs = np.sqrt(errs)
+    return mean_profile, errs
+
+def calculate_sky_profile(sky_profiles : List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
     """Calculate sky profile parallel to track.
        We use linear polynomial approximation for true sky brighness along track
        I_sky(s) = a*s + b,
        where s is a index along track
        """
-    L = side_profiles[0].shape[0]
-    N = len(side_profiles)
+    L = sky_profiles[0].shape[0]
+    N = len(sky_profiles)
     xs = np.zeros((L*N,))
     ys = np.zeros((L*N,))
     for s in range(L):
         for n in range(N):
             xs[s*N+n] = s
-            ys[s*N+n] = side_profiles[n][s]
+            ys[s*N+n] = sky_profiles[n][s]
     polynom = np.polynomial.Polynomial.fit(xs, ys, 1)
     values = polynom(xs)
     ds = ys - values
@@ -121,22 +138,33 @@ def calculate_sky_profile(side_profiles : List[np.ndarray]) -> Tuple[np.ndarray,
     xs = np.array(range(L))
     values = polynom(xs)
     return values, stdev
-    
 
-def calculate_drift_profile(drift_profile_raw : np.ndarray,
-                            side_profiles : List[np.ndarray],
-                            reference_profile : np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    L = drift_profile_raw.shape[0]
+def compensate_reference_profile(drift_profile : np.ndarray,
+                                 reference_profile : np.ndarray,
+                                 reference_stdev : np.ndarray) -> np.ndarray:
+    return drift_profile
 
-    # scale factor to compenste varying star over track speed
-    ref_average = np.mean(reference_profile)
-    scale = smooth_track_profile(ref_average / reference_profile, int(L/8))
+def calculate_true_drift_profile(drift_profile : np.ndarray,
+                                 side_profiles : List[np.ndarray],
+                                 reference_profiles : List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+    L = drift_profile.shape[0]
+    for side_profile in side_profiles:
+        assert side_profile.shape[0]==L
+
+    for reference_profile in reference_profiles:
+        assert reference_profile.shape[0]==L
+
+    # calculate reference profile
+    reference_profile, reference_stdev = calculate_reference_profile(reference_profiles)
 
     # average sky profile parallel to occ profile
     sky_profile, sky_stdev = calculate_sky_profile(side_profiles)
 
     # remove sky profile and compensate star speed
-    drift_profile = (drift_profile_raw - sky_profile) * scale
+    drift_profile = (drift_profile - sky_profile)
+
+    # compensate not uniform star moving
+    drift_profile = compensate_reference_profile(drift_profile, reference_profile, reference_stdev)
 
     # estimate errors
     smoothed = smooth_track_profile(drift_profile, 3)
