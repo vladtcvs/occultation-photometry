@@ -158,8 +158,8 @@ class DetectTracksPanel(wx.Panel, IObserver):
 
         w = self.context.gray.shape[1]
         h = self.context.gray.shape[0]
-        rw = self.context.ref_track.gray.shape[1]
-        rh = self.context.ref_track.gray.shape[0]
+        rw = self.context.mean_ref_track.gray.shape[1]
+        rh = self.context.mean_ref_track.gray.shape[0]
         self.context.specify_occ_track(int(w/2-rw/2), int(h/2-rh/2))
 
     def SpecifyOccultationTrack(self, event):
@@ -256,9 +256,9 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
             with open(pathname, "w", encoding='utf8') as f:
                 writer = csv.writer(f)
                 writer.writerow(['id', 'value', 'error'])
-                ids = range(self.context.ref_profile.profile.shape[0])
-                values = self.context.ref_profile.profile
-                errors = self.context.ref_profile.error
+                ids = range(self.context.mean_ref_profile.profile.shape[0])
+                values = self.context.mean_ref_profile.profile
+                errors = self.context.mean_ref_profile.error
                 for index, value, error in zip(ids, values, errors):
                     writer.writerow([index, value, error])
 
@@ -266,32 +266,23 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
         self.context.analyze_reference_track()
 
     def UpdateImage(self):
-        if self.context.ref_track_rgb is not None:
-            height, width = self.context.ref_track_rgb.shape[:2]
-            data = self.context.ref_track_rgb.tobytes()
+        if self.context.mean_ref_track_rgb is not None:
+            height, width = self.context.mean_ref_track_rgb.shape[:2]
+            data = self.context.mean_ref_track_rgb.tobytes()
             image = wx.Image(width, height)
             image.SetData(data)
             gray_bitmap = image.ConvertToBitmap()
             self.ref_track_ctrl.SetBitmap(gray_bitmap)
             self.ref_track_ctrl.Refresh()
 
-        if self.context.ref_profile_rgb is not None:
-            height, width = self.context.ref_profile_rgb.shape[:2]
-            data = self.context.ref_profile_rgb.tobytes()
+        if self.context.mean_ref_profile_rgb is not None:
+            height, width = self.context.mean_ref_profile_rgb.shape[:2]
+            data = self.context.mean_ref_profile_rgb.tobytes()
             image = wx.Image(width, height)
             image.SetData(data)
             gray_bitmap = image.ConvertToBitmap()
             self.ref_profile_ctrl.SetBitmap(gray_bitmap)
             self.ref_profile_ctrl.Refresh()
-
-        if self.context.ref_slices_rgb is not None:
-            height, width = self.context.ref_slices_rgb.shape[:2]
-            data = self.context.ref_slices_rgb.tobytes()
-            image = wx.Image(width, height)
-            image.SetData(data)
-            gray_bitmap = image.ConvertToBitmap()
-            self.ref_slices_ctrl.SetBitmap(gray_bitmap)
-            self.ref_slices_ctrl.Refresh()
 
         self.Layout()
         self.Refresh()
@@ -377,6 +368,9 @@ class OccultationTrackPanel(wx.Panel):
         self.context.specify_occ_track(x + dx, y + dy)
 
     def AnalyzeOccultation(self, event):
+        x = self.context.occ_track_pos[1]
+        y = self.context.occ_track_pos[0]
+        self.context.specify_occ_track(x, y)
         self.context.analyze_occ_track()
 
     def UpdateImage(self):
@@ -397,15 +391,6 @@ class OccultationTrackPanel(wx.Panel):
             gray_bitmap = image.ConvertToBitmap()
             self.occ_profile_ctrl.SetBitmap(gray_bitmap)
             self.occ_profile_ctrl.Refresh()
-
-        if self.context.occ_slices_rgb is not None:
-            height, width = self.context.occ_slices_rgb.shape[:2]
-            data = self.context.occ_slices_rgb.tobytes()
-            image = wx.Image(width, height)
-            image.SetData(data)
-            gray_bitmap = image.ConvertToBitmap()
-            self.occ_slices_ctrl.SetBitmap(gray_bitmap)
-            self.occ_slices_ctrl.Refresh()
 
 
         self.Layout()

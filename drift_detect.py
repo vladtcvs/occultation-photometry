@@ -7,17 +7,65 @@ import statistics
 
 from skimage import measure
 
+class TrackRect:
+    def __init__(self, left, right, top, bottom):
+        self.left = left
+        self.right = right
+        self.top = top
+        self.bottom = bottom
+        self.w = self.right - self.left + 1
+        self.h = self.bottom - self.top + 1
 
-def extract_track(gray : np.ndarray, x0 : int, y0 : int, w : int, h : int, margin : int):
-    track = gray[y0-margin:y0+h+margin, x0-margin:x0+w+margin]
-    return track
+    def point_inside_rect(self, x : int, y : int) -> bool:
+        return x >= self.left and x <= self.right and y >= self.top and y <= self.bottom
 
+    def detect_overlap(self, other) -> bool:
+        if self.point_inside_rect(other.left, other.top):
+            return True
+        if self.point_inside_rect(other.right, other.top):
+            return True
+        if self.point_inside_rect(other.left, other.bottom):
+            return True
+        if self.point_inside_rect(other.right, other.bottom):
+            return True
+        return False
 
-def detect_bold_tracks(gray : np.ndarray,
+    def extract_track(self, gray : np.ndarray, margin : int) -> Tuple[np.ndarray, np.ndarray]:
+        x0 = self.left-margin
+        y0 = self.top-margin
+        x1 = self.right+margin+1
+        y1 = self.bottom+margin+1
+
+        tw = x1 - x0
+        th = y1 - y0
+        
+        x0_c = max(x0, 0)
+        y0_c = max(y0, 0)
+        x1_c = min(x1, gray.shape[1])
+        y1_c = min(y1, gray.shape[0])
+
+        dy = y0_c - y0
+        dx = x0_c - x0
+        cw = x1_c - x0_c
+        ch = y1_c - y0_c
+
+        result = np.empty((th, tw))
+        result.fill(np.nan)
+        track = gray[y0_c:y1_c, x0_c:x1_c]
+        result[dy:dy+ch, dx:dx+cw] = track
+
+        mask = np.ones(result.shape)
+        idxs = np.where(np.isnan(result))
+        mask[idxs] = 0
+        result[idxs] = 0
+
+        return result, mask
+
+def detect_bold_tracks(gray : np.ndarray, 
                        num_tracks : int = 4,
                        smooth_size : int = 11,
                        blur_size : int = 35,
-                       threshold_k : float = 1.1):
+                       threshold_k : float = 1.1) -> List[TrackRect]:
     if blur_size % 2 == 0:
         blur_size += 1
     if smooth_size % 2 == 0:
@@ -78,44 +126,28 @@ def detect_bold_tracks(gray : np.ndarray,
             right = max(right, x)
             top = min(top, y)
             bottom = max(bottom, y)
-        tracks.append((left, right, top, bottom))
+        tracks.append(TrackRect(left, right, top, bottom))
 
     return tracks
 
-def point_inside_rect(x, y, left, right, top, bottom) -> bool:
-    return x >= left and x <= right and y >= top and y <= bottom
-
-def detect_overlap(track1, track2) -> bool:
-    left1, right1, top1, bottom1 = track1
-    left2, right2, top2, bottom2 = track2
-    if point_inside_rect(left1, top1, left2, right2, top2, bottom2):
-        return True
-    if point_inside_rect(right1, top1, left2, right2, top2, bottom2):
-        return True
-    if point_inside_rect(left1, bottom1, left2, right2, top2, bottom2):
-        return True
-    if point_inside_rect(right1, bottom1, left2, right2, top2, bottom2):
-        return True
-    return False
-
-def clear_overlapped(tracks : list) -> list:
+def clear_overlapped(tracks : List[TrackRect]) -> List[TrackRect]:
     not_overlapped = []
     for ind1, track1 in enumerate(tracks):
         for ind2, track2 in enumerate(tracks):
             if ind1 == ind2:
                 continue
-            if detect_overlap(track1, track2):
+            if track1.detect_overlap(track2):
                 break
         else:
             not_overlapped.append(track1)
     return not_overlapped
 
-def clear_bad_size(tracks : list, kappa : float = 1) -> list:
+def clear_bad_size(tracks : List[TrackRect], kappa : float = 1) -> List[TrackRect]:
     widths = []
     heights = []
-    for left, right, top, bottom in tracks:
-        width = int(right - left)
-        height = int(bottom - top)
+    for track in tracks:
+        width = int(track.right - track.left)
+        height = int(track.bottom - track.top)
         widths.append(width)
         heights.append(height)
     width0 = statistics.mean(widths)
@@ -123,39 +155,46 @@ def clear_bad_size(tracks : list, kappa : float = 1) -> list:
     stdw = statistics.stdev(widths)
     stdh = statistics.stdev(heights)
     goods = []
-    for left, right, top, bottom in tracks:
-        width = right - left
-        height = bottom - top
+    for track in tracks:
+        width = track.right - track.left
+        height = track.bottom - track.top
         if abs(width - width0) < stdw * kappa and abs(height - height0) < stdh * kappa:
-            goods.append((left, right, top, bottom))
+            goods.append(track)
     return goods
 
-def mean_track(tracks : list, image : np.ndarray) -> np.ndarray:
+def correlate_tracks(tracks : List[TrackRect]) -> List[TrackRect]:
     maxw = 0
     maxh = 0
-    for left,right,top,bottom in tracks:
-        w = right - left
-        h = bottom - top
-        maxw = max(maxw, w)
-        maxh = max(maxh, h)
-    sum_track = np.zeros((maxh,maxw))
-    weight = np.zeros((maxh,maxw))
-    for left,right,top,bottom in tracks:
-        block = image[top:bottom,left:right]
-        h = block.shape[0]
-        w = block.shape[1]
-        
-        dx = 0
-        dy = 0
+    for track in tracks:
+        maxw = max(maxw, track.w)
+        maxh = max(maxh, track.h)
 
-        aligned = np.zeros((maxh,maxw))
-        aligned_weight = np.zeros((maxh,maxw))
-        aligned[dy:dy+h,dx:dx+w] = block
-        aligned_weight[dy:dy+h,dx:dx+w] = 1
-        sum_track += aligned
-        weight += aligned_weight
-    sum_track = sum_track / weight
-    sum_track[np.where(weight == 0)] = 0
+    results = []
+    for track in tracks:
+        # TODO: do correlation
+        dx = -int((maxw - track.w)/2)
+        dy = -int((maxh - track.h)/2)
+
+        left = track.left + dx
+        right = left + maxw - 1
+        top = track.top + dy
+        bottom = top + maxh - 1
+        aligned = TrackRect(left, right, top, bottom)
+        results.append(aligned)
+    return results
+
+def mean_track(tracks : List[TrackRect], image : np.ndarray) -> np.ndarray:
+    w = tracks[0].w
+    h = tracks[0].h
+    sum_track = np.zeros((h,w))
+    sum_weight = np.zeros((h,w))
+    for track in tracks:
+        block, weight = track.extract_track(image, 0)
+        sum_track += block
+        sum_weight += weight
+
+    sum_track = sum_track / sum_weight
+    sum_track[np.where(sum_weight == 0)] = 0
     return sum_track
 
 def track_to_points(track : np.ndarray) -> list:
@@ -201,17 +240,17 @@ def smooth_track_points(points, transposed):
         average[x, 1-index] = points[x, 1-index]
     return average
 
-def detect_reference_tracks(gray : np.ndarray, count : int = 10, kappas : list | None = None) -> list:
+def detect_reference_tracks(gray : np.ndarray, count : int = 10, kappas : list | None = None) -> List[TrackRect]:
     tracks = detect_bold_tracks(gray, count)
     tracks = clear_overlapped(tracks)
     if kappas is None:
         kappas = [2, 1.2]
     for kappa in kappas:
         tracks = clear_bad_size(tracks, kappa=kappa)
+    tracks = correlate_tracks(tracks)
     return tracks
-    
 
-def build_reference_track(gray : np.ndarray, references : List[tuple]) -> Tuple[np.ndarray, np.ndarray, bool]:
+def build_mean_reference_track(gray : np.ndarray, references : List[TrackRect]) -> Tuple[np.ndarray, np.ndarray, bool]:
     track = mean_track(references, gray)
     points, transposed = track_to_points(track)
     points = smooth_track_points(points, transposed)

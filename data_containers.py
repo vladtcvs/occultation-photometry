@@ -61,11 +61,14 @@ class DriftTrack:
 
     def draw(self, color, transparency):
         rgb = cv2.cvtColor(self.gray.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+        return self.draw_in_place(rgb, 0, 0, color, transparency)
+
+    def draw_in_place(self, rgb, left, top, color, transparency):
         color = np.array(color)
         if self.points is not None:
             for y, x in self.points:
-                xx = int(x+self.margin)
-                yy = int(y+self.margin)
+                xx = int(x+self.margin+left)
+                yy = int(y+self.margin+top)
                 if xx < 0 or yy < 0 or xx >= rgb.shape[1] or yy >= rgb.shape[0]:
                     continue
                 rgb[yy, xx] = rgb[yy, xx] * transparency + color * (1-transparency)
@@ -80,7 +83,7 @@ class DriftTrack:
                 x2 = int(x + nx*self.half_w + self.margin)
                 y2 = int(y + ny*self.half_w + self.margin)
 
-                cv2.line(rgb, (x1,y1), (x2,y2), (0,200,0), 1)
+                cv2.line(rgb, (x1+left,y1+top), (x2+left,y2+top), (0,200,0), 1)
         return rgb
 
     def plot_slice(self, w : int, h : int, layer : int = -1):

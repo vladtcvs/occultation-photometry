@@ -62,8 +62,7 @@ def make_slice(track : np.ndarray, position, direction, half_w : int, offset : f
         slice[i] = getpixel(track, y=py, x=px)
     return slice
 
-def slice_track(track : np.ndarray, reference_track_points : np.ndarray, half_w : int, margin : int, offset : float) -> np.ndarray:
-    normals = build_track_normals(reference_track_points)
+def slice_track(track : np.ndarray, reference_track_points : np.ndarray, normals : np.ndarray, half_w : int, margin : int, offset : float) -> np.ndarray:
     L = reference_track_points.shape[0]
     slices = np.zeros((L,2*half_w+1))
     shift = np.array([margin, margin])
