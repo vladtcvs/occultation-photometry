@@ -212,11 +212,6 @@ class ReferenceTrackPanel(wx.Panel, IObserver):
         self.ref_profile_ctrl = wx.StaticBitmap(ref_profile_panel, wx.ID_ANY, wx.Bitmap(empty_ref_profile_img))
         plot_sizer.Add(ref_profile_panel)
 
-        ref_slices_panel = wx.Panel(plot_panel)
-        empty_ref_slices_img = wx.Image(640,480)
-        self.ref_slices_ctrl = wx.StaticBitmap(ref_slices_panel, wx.ID_ANY, wx.Bitmap(empty_ref_slices_img))
-        plot_sizer.Add(ref_slices_panel)
-
         ctl_sizer = wx.BoxSizer(wx.VERTICAL)
         ctl_panel = wx.Panel(self)
         ctl_panel.SetSizer(ctl_sizer)
@@ -317,11 +312,6 @@ class OccultationTrackPanel(wx.Panel):
         empty_occ_profile_img = wx.Image(640,480)
         self.occ_profile_ctrl = wx.StaticBitmap(occ_profile_panel, wx.ID_ANY, wx.Bitmap(empty_occ_profile_img))
         plot_sizer.Add(occ_profile_panel)
-
-        occ_slices_panel = wx.Panel(plot_panel)
-        empty_occ_slices_img = wx.Image(640,480)
-        self.occ_slices_ctrl = wx.StaticBitmap(occ_slices_panel, wx.ID_ANY, wx.Bitmap(empty_occ_slices_img))
-        plot_sizer.Add(occ_slices_panel)
 
         ctl_sizer = wx.BoxSizer(wx.VERTICAL)
         ctl_panel = wx.Panel(self)
