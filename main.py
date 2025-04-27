@@ -5,8 +5,11 @@ import wx.lib.scrolledpanel as scrolled
 import sys
 import cv2
 import numpy as np
+
 import drift_profile
+import drift_slice
 import drift_detect
+
 from PIL import Image
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -125,8 +128,8 @@ class DriftProfile:
         if smooth_err == 0:
             rgb = plot_to_numpy(xr, [self.profile, self.profile + self.error, self.profile - self.error], w, h)
         else:
-            top = drift_profile.smooth_track_profile(self.profile + self.error, smooth_err)
-            bottom = drift_profile.smooth_track_profile(self.profile - self.error, smooth_err)
+            top = drift_slice.smooth_track_profile(self.profile + self.error, smooth_err)
+            bottom = drift_slice.smooth_track_profile(self.profile - self.error, smooth_err)
             rgb = plot_to_numpy(xr, [self.profile, top, bottom], w, h)
         return rgb
 
@@ -246,17 +249,17 @@ class DriftContext:
 
     def analyze_reference_track(self):
         self.ref_track.half_w = self.ref_half_w
-        self.ref_track.normals = drift_profile.build_track_normals(self.ref_track.points)
+        self.ref_track.normals = drift_slice.build_track_normals(self.ref_track.points)
 
         # analyze each reference track and find it's profile
         self.ref_profiles = []
         for ref_track in self.reference_tracks:
-            ref_track.slices = drift_profile.slice_track(ref_track.gray, self.ref_track.points, self.ref_track.half_w, 0, 0)
-            profile = drift_profile.slices_to_profile(ref_track.slices)
+            ref_track.slices = drift_slice.slice_track(ref_track.gray, self.ref_track.points, self.ref_track.half_w, 0, 0)
+            profile = drift_slice.slices_to_profile(ref_track.slices)
             self.ref_profiles.append(profile)
 
         # find mean reference track
-        ref_profile, ref_stdev = drift_profile.calculate_reference_profile(self.ref_profiles)
+        ref_profile, ref_stdev = drift_slice.calculate_reference_profile(self.ref_profiles)
         self.ref_profile = DriftProfile(ref_profile, ref_stdev)
 
         # draw reference track
@@ -296,7 +299,7 @@ class DriftContext:
 
     def analyze_occ_track(self):
         self.occ_track.half_w = self.occ_half_w
-        self.occ_track.slices = drift_profile.slice_track(self.occ_track.gray,
+        self.occ_track.slices = drift_slice.slice_track(self.occ_track.gray,
                                                self.occ_track.points,
                                                self.occ_track.half_w,
                                                self.occ_track.margin,
@@ -304,23 +307,23 @@ class DriftContext:
         
         side_profiles = []
         for i in (-4,-2,2,4):
-            occ_slices_offset = drift_profile.slice_track(self.occ_track.gray,
+            occ_slices_offset = drift_slice.slice_track(self.occ_track.gray,
                                                         self.occ_track.points,
                                                         self.occ_track.half_w,
                                                         self.occ_track.margin,
                                                         i*self.occ_track.half_w)
-            occ_profile_offset = drift_profile.slices_to_profile(occ_slices_offset)
+            occ_profile_offset = drift_slice.slices_to_profile(occ_slices_offset)
             side_profiles.append(occ_profile_offset)
     
         # profile of track
-        occ_profile_raw = drift_profile.slices_to_profile(self.occ_track.slices)
+        occ_profile_raw = drift_slice.slices_to_profile(self.occ_track.slices)
 
         # Profile without sky glow
         if self.build_true_occ_profile:
-            occ_profile, occ_profile_stdev = drift_profile.calculate_drift_profile(occ_profile_raw, side_profiles, self.ref_profile.profile)
+            occ_profile, occ_profile_stdev = drift_slice.calculate_drift_profile(occ_profile_raw, side_profiles, self.ref_profile.profile)
             self.occ_profile = DriftProfile(occ_profile, occ_profile_stdev)
         else:
-            _, sky_stdev = drift_profile.calculate_sky_profile(side_profiles)
+            _, sky_stdev = drift_slice.calculate_sky_profile(side_profiles)
             self.occ_profile = DriftProfile(occ_profile_raw, sky_stdev)
 
         # build occultation track plot
