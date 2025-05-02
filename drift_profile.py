@@ -63,7 +63,7 @@ def compensate_reference_profile(drift_profile : np.ndarray,
 
 def calculate_true_drift_profile(drift_profile : np.ndarray,
                                  side_profiles : List[np.ndarray],
-                                 reference_profiles : List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+                                 reference_profiles : List[np.ndarray]) -> Tuple[np.ndarray, np.ndarray, dict]:
     L = drift_profile.shape[0]
     for side_profile in side_profiles:
         assert side_profile.shape[0]==L
@@ -86,8 +86,13 @@ def calculate_true_drift_profile(drift_profile : np.ndarray,
     # estimate errors
     smoothed = smooth_track_profile(drift_profile, 3)
     delta = np.sqrt(np.sum((smoothed - drift_profile)**2)/L)
-    err = np.ones((L,))*delta
-    return drift_profile, np.sqrt(sky_stdev**2+err**2)
+    mean = np.mean(drift_profile)
+    stats = {
+        "mean" : mean,
+        "stdev" : delta,
+        "sky_stdev" : np.mean(sky_stdev),
+    }
+    return drift_profile, np.sqrt(sky_stdev**2), stats
 
 def reference_profile_time_analyze(profile : np.ndarray) -> np.ndarray:
     """Find such time of each point of profile, that stretching profile according to such times, make it flat"""

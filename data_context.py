@@ -226,10 +226,12 @@ class DriftContext:
 
         # Profile without sky glow
         if self.build_true_occ_profile:
-            occ_profile, occ_profile_stdev = drift_profile.calculate_true_drift_profile(occ_profile_raw,
+            occ_profile, occ_profile_stdev, stats = drift_profile.calculate_true_drift_profile(occ_profile_raw,
                                                                                         side_profiles,
                                                                                         ref_profiles)
             self.occ_profile = DriftProfile(occ_profile, occ_profile_stdev)
+            for key in stats:
+                print(f"{key} : {stats[key]}")
         else:
             _, sky_stdev = drift_profile.calculate_sky_profile(side_profiles)
             self.occ_profile = DriftProfile(occ_profile_raw, sky_stdev)
