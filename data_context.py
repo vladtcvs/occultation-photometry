@@ -194,13 +194,19 @@ class DriftContext:
 
     def analyze_occ_track(self):
         self.occ_track.half_w = self.occ_half_w
+
+        assert self.occ_track is not None
+
+        # profile of track
         self.occ_track.slices = drift_slice.slice_track(self.occ_track.gray,
                                                self.occ_track.points,
                                                self.occ_track.normals,
                                                self.occ_track.half_w,
                                                self.occ_track.margin,
                                                0)
-        
+        occ_profile_raw = drift_slice.slices_to_profile(self.occ_track.slices)
+
+        # profiles parallel to track
         side_profiles = []
         for i in (-4,-2,2,4):
             occ_slices_offset = drift_slice.slice_track(self.occ_track.gray,
@@ -212,14 +218,17 @@ class DriftContext:
             occ_profile_offset = drift_slice.slices_to_profile(occ_slices_offset)
             side_profiles.append(occ_profile_offset)
 
-        # profile of track
-        occ_profile_raw = drift_slice.slices_to_profile(self.occ_track.slices)
+        # referece profiles
+        ref_profiles = self.ref_profiles
+        assert ref_profiles is not None
+        assert type(ref_profiles) == list
+        assert len(ref_profiles) > 0
 
         # Profile without sky glow
         if self.build_true_occ_profile:
             occ_profile, occ_profile_stdev = drift_profile.calculate_true_drift_profile(occ_profile_raw,
                                                                                         side_profiles,
-                                                                                        self.ref_profiles)
+                                                                                        ref_profiles)
             self.occ_profile = DriftProfile(occ_profile, occ_profile_stdev)
         else:
             _, sky_stdev = drift_profile.calculate_sky_profile(side_profiles)
